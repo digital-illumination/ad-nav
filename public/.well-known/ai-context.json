@@ -1,0 +1,37 @@
+{
+  "name": "Adam Stacey",
+  "description": "Personal context portfolio for Adam Stacey — Head of Technology at Compare the Market, AI apprentice, and digital strategist.",
+  "url": "https://ad-nav.co.uk",
+  "context_portfolio": {
+    "description": "Structured personal context files designed for AI agents and MCP clients.",
+    "api_base": "/api/context",
+    "discovery": "/api/context",
+    "files": [
+      "identity",
+      "role-and-responsibilities",
+      "current-projects",
+      "team-and-relationships",
+      "tools-and-systems",
+      "communication-style",
+      "goals-and-priorities",
+      "preferences-and-constraints",
+      "domain-knowledge",
+      "decision-log"
+    ],
+    "format": "markdown"
+  },
+  "blog": {
+    "api_base": "/api/blog",
+    "rss_feed": "/feed.xml",
+    "format": "markdown"
+  },
+  "seo": {
+    "sitemap": "/sitemap.xml",
+    "robots": "/robots.txt",
+    "rss": "/feed.xml"
+  },
+  "contact": {
+    "email": "adam@ad-nav.co.uk",
+    "linkedin": "https://www.linkedin.com/in/adamcstacey/"
+  }
+}

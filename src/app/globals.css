@@ -1,0 +1,636 @@
+@import "tailwindcss";
+
+/* ── Cyberpunk Theme Variables ── */
+:root {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-card: rgba(18, 18, 26, 0.8);
+  --neon-purple: #b829e3;
+  --neon-pink: #ff2d95;
+  --neon-cyan: #00f0ff;
+  --neon-purple-glow: rgba(184, 41, 227, 0.6);
+  --neon-pink-glow: rgba(255, 45, 149, 0.6);
+  --neon-cyan-glow: rgba(0, 240, 255, 0.6);
+  --text-primary: #e0e0e0;
+  --text-secondary: #8a8a9a;
+  --text-dim: #5a5a6a;
+  --border-glow: rgba(184, 41, 227, 0.3);
+}
+
+@theme inline {
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-neon-purple: var(--neon-purple);
+  --color-neon-pink: var(--neon-pink);
+  --color-neon-cyan: var(--neon-cyan);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-card: var(--bg-card);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-dim: var(--text-dim);
+  --color-border-glow: var(--border-glow);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+/* ── Base Styles ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--neon-purple) var(--bg-secondary);
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--neon-purple);
+  color: white;
+}
+
+/* ── Scanline Overlay ── */
+.scanline-overlay::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 50;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+}
+
+/* ── Neon Glow Utilities ── */
+.neon-text-purple {
+  color: var(--neon-purple);
+  text-shadow:
+    0 0 7px var(--neon-purple-glow),
+    0 0 10px var(--neon-purple-glow),
+    0 0 21px var(--neon-purple-glow),
+    0 0 42px var(--neon-purple);
+}
+
+.neon-text-pink {
+  color: var(--neon-pink);
+  text-shadow:
+    0 0 7px var(--neon-pink-glow),
+    0 0 10px var(--neon-pink-glow),
+    0 0 21px var(--neon-pink-glow),
+    0 0 42px var(--neon-pink);
+}
+
+.neon-text-cyan {
+  color: var(--neon-cyan);
+  text-shadow:
+    0 0 7px var(--neon-cyan-glow),
+    0 0 10px var(--neon-cyan-glow),
+    0 0 21px var(--neon-cyan-glow),
+    0 0 42px var(--neon-cyan);
+}
+
+/* ── Neon Border Card ── */
+.neon-border {
+  border: 1px solid var(--border-glow);
+  box-shadow:
+    0 0 5px var(--neon-purple-glow),
+    inset 0 0 5px rgba(184, 41, 227, 0.1);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.neon-border:hover {
+  border-color: var(--neon-purple);
+  box-shadow:
+    0 0 10px var(--neon-purple-glow),
+    0 0 20px rgba(184, 41, 227, 0.3),
+    inset 0 0 10px rgba(184, 41, 227, 0.15);
+}
+
+/* ── Glass Card ── */
+.glass-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-glow);
+  border-radius: 0.75rem;
+}
+
+/* ── Animated Neon Border ── */
+@property --angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.animated-border {
+  position: relative;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.animated-border::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--angle),
+    var(--neon-purple),
+    var(--neon-pink),
+    var(--neon-cyan),
+    var(--neon-purple)
+  );
+  z-index: -1;
+  animation: rotate-border 4s linear infinite;
+}
+
+.animated-border::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: var(--bg-secondary);
+  z-index: -1;
+}
+
+@keyframes rotate-border {
+  to {
+    --angle: 360deg;
+  }
+}
+
+/* ── Glitch Text Effect ── */
+.glitch {
+  position: relative;
+  animation: glitch-skew 4s infinite linear alternate-reverse;
+}
+
+.glitch::before,
+.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.glitch::before {
+  left: 2px;
+  text-shadow: -2px 0 var(--neon-pink);
+  clip-path: inset(0 0 0 0);
+  animation: glitch-clip-1 2s infinite linear alternate-reverse;
+}
+
+.glitch::after {
+  left: -2px;
+  text-shadow: 2px 0 var(--neon-cyan);
+  clip-path: inset(0 0 0 0);
+  animation: glitch-clip-2 2s infinite linear alternate-reverse;
+}
+
+@keyframes glitch-skew {
+  0% { transform: skew(0deg); }
+  2% { transform: skew(0.4deg); }
+  4% { transform: skew(0deg); }
+  60% { transform: skew(0deg); }
+  62% { transform: skew(-0.3deg); }
+  64% { transform: skew(0deg); }
+  100% { transform: skew(0deg); }
+}
+
+@keyframes glitch-clip-1 {
+  0% { clip-path: inset(20% 0 60% 0); }
+  10% { clip-path: inset(40% 0 30% 0); }
+  20% { clip-path: inset(80% 0 5% 0); }
+  30% { clip-path: inset(10% 0 70% 0); }
+  40% { clip-path: inset(50% 0 30% 0); }
+  50% { clip-path: inset(30% 0 50% 0); }
+  60% { clip-path: inset(70% 0 10% 0); }
+  70% { clip-path: inset(15% 0 65% 0); }
+  80% { clip-path: inset(55% 0 25% 0); }
+  90% { clip-path: inset(35% 0 45% 0); }
+  100% { clip-path: inset(5% 0 80% 0); }
+}
+
+@keyframes glitch-clip-2 {
+  0% { clip-path: inset(60% 0 20% 0); }
+  10% { clip-path: inset(30% 0 40% 0); }
+  20% { clip-path: inset(5% 0 80% 0); }
+  30% { clip-path: inset(70% 0 10% 0); }
+  40% { clip-path: inset(30% 0 50% 0); }
+  50% { clip-path: inset(50% 0 30% 0); }
+  60% { clip-path: inset(10% 0 70% 0); }
+  70% { clip-path: inset(65% 0 15% 0); }
+  80% { clip-path: inset(25% 0 55% 0); }
+  90% { clip-path: inset(45% 0 35% 0); }
+  100% { clip-path: inset(80% 0 5% 0); }
+}
+
+/* ── Flicker Animation ── */
+@keyframes flicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+    opacity: 1;
+    text-shadow:
+      0 0 7px var(--neon-purple-glow),
+      0 0 10px var(--neon-purple-glow),
+      0 0 21px var(--neon-purple-glow);
+  }
+  20%, 24%, 55% {
+    opacity: 0.6;
+    text-shadow: none;
+  }
+}
+
+.neon-flicker {
+  animation: flicker 3s infinite alternate;
+}
+
+/* ── Pulse Glow ── */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px var(--neon-purple-glow), 0 0 10px rgba(184, 41, 227, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 15px var(--neon-purple-glow), 0 0 30px rgba(184, 41, 227, 0.4);
+  }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ── Hero glow breathing ── */
+@keyframes hero-photo-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px var(--neon-purple-glow), 0 0 40px var(--neon-purple-glow);
+  }
+  25% {
+    box-shadow: 0 0 30px var(--neon-purple-glow), 0 0 55px var(--neon-purple-glow), 0 0 80px rgba(184, 41, 227, 0.25);
+  }
+  55% {
+    box-shadow: 0 0 12px var(--neon-purple-glow), 0 0 22px rgba(184, 41, 227, 0.3);
+  }
+  80% {
+    box-shadow: 0 0 35px var(--neon-purple-glow), 0 0 60px var(--neon-purple-glow), 0 0 90px rgba(184, 41, 227, 0.3);
+  }
+}
+
+.hero-photo-pulse {
+  animation: hero-photo-glow 5s ease-in-out infinite;
+}
+
+@keyframes hero-text-glow {
+  0%, 100% {
+    text-shadow: 0 0 7px var(--neon-purple-glow), 0 0 10px var(--neon-purple-glow), 0 0 21px var(--neon-purple-glow), 0 0 42px var(--neon-purple);
+  }
+  30% {
+    text-shadow: 0 0 10px var(--neon-purple-glow), 0 0 20px var(--neon-purple-glow), 0 0 40px var(--neon-purple-glow), 0 0 70px var(--neon-purple);
+  }
+  60% {
+    text-shadow: 0 0 5px var(--neon-purple-glow), 0 0 8px var(--neon-purple-glow), 0 0 14px var(--neon-purple-glow), 0 0 28px var(--neon-purple);
+  }
+  85% {
+    text-shadow: 0 0 12px var(--neon-purple-glow), 0 0 22px var(--neon-purple-glow), 0 0 45px var(--neon-purple-glow), 0 0 80px var(--neon-purple);
+  }
+}
+
+.hero-text-pulse {
+  animation: hero-text-glow 4s ease-in-out infinite;
+}
+
+/* ── Grid Background ── */
+.cyber-grid {
+  background-image:
+    linear-gradient(rgba(184, 41, 227, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(184, 41, 227, 0.05) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+/* ── Typing Cursor ── */
+.typing-cursor::after {
+  content: '|';
+  animation: blink 1s step-end infinite;
+  color: var(--neon-cyan);
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ── Gradient Text ── */
+.gradient-text {
+  background: linear-gradient(135deg, var(--neon-purple), var(--neon-pink), var(--neon-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Blog Prose (Cyberpunk) ── */
+.prose-cyberpunk {
+  color: var(--text-secondary);
+  line-height: 1.75;
+  font-size: 1rem;
+}
+
+.prose-cyberpunk h1 {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: var(--neon-purple);
+  text-shadow:
+    0 0 7px var(--neon-purple-glow),
+    0 0 10px var(--neon-purple-glow);
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+.prose-cyberpunk h2 {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--neon-purple);
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+.prose-cyberpunk h3 {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 700;
+  font-size: 1.125rem;
+  color: var(--neon-cyan);
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.prose-cyberpunk p {
+  margin-bottom: 1.25rem;
+}
+
+.prose-cyberpunk strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.prose-cyberpunk em {
+  font-style: italic;
+}
+
+.prose-cyberpunk ul {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 1.25rem;
+}
+
+.prose-cyberpunk ul li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 1rem;
+}
+
+.prose-cyberpunk ul li::before {
+  content: '\25B6';
+  color: var(--neon-pink);
+  font-size: 0.7em;
+  margin-top: 0.35em;
+  flex-shrink: 0;
+}
+
+.prose-cyberpunk ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+  counter-reset: cyberpunk-counter;
+  list-style: none;
+}
+
+.prose-cyberpunk ol li {
+  counter-increment: cyberpunk-counter;
+  margin-bottom: 0.5rem;
+  padding-left: 0.5rem;
+}
+
+.prose-cyberpunk ol li::before {
+  content: counter(cyberpunk-counter) '.';
+  color: var(--neon-pink);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 700;
+  margin-right: 0.5rem;
+}
+
+.prose-cyberpunk a {
+  color: var(--neon-cyan);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.2s ease, text-shadow 0.2s ease;
+}
+
+.prose-cyberpunk a:hover {
+  text-shadow: 0 0 7px var(--neon-cyan-glow);
+}
+
+.prose-cyberpunk blockquote {
+  border-left: 3px solid var(--neon-purple);
+  padding-left: 1rem;
+  margin: 1.5rem 0;
+  color: var(--text-primary);
+  font-style: italic;
+}
+
+.prose-cyberpunk hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--neon-purple), transparent);
+  margin: 2rem 0;
+}
+
+.prose-cyberpunk code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  background: rgba(184, 41, 227, 0.1);
+  border: 1px solid rgba(184, 41, 227, 0.2);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.875em;
+  color: var(--neon-cyan);
+}
+
+.prose-cyberpunk pre {
+  background: rgba(10, 10, 15, 0.8);
+  border: 1px solid var(--border-glow);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.prose-cyberpunk pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+}
+
+/* ── Smooth page transitions ── */
+.page-transition {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Contact page animations ── */
+@keyframes signal-ping {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.8);
+    opacity: 0;
+  }
+}
+
+@keyframes contact-card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(40px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+
+@keyframes terminal-scan {
+  0% { top: -2px; opacity: 0; }
+  5% { opacity: 1; }
+  95% { opacity: 1; }
+  100% { top: calc(100% + 2px); opacity: 0; }
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes status-line-reveal {
+  0% {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── CV page: animated neon rule ── */
+@keyframes neon-line-slide {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.neon-hr {
+  height: 1px;
+  border: none;
+  background: linear-gradient(90deg, transparent, var(--neon-purple), var(--neon-pink), var(--neon-cyan), transparent);
+  background-size: 200% 100%;
+  animation: neon-line-slide 4s linear infinite;
+  box-shadow: 0 0 6px var(--neon-purple-glow), 0 0 12px rgba(184, 41, 227, 0.15);
+}
+
+/* ── CV page: career progression bar ── */
+@keyframes progression-reveal {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+.progression-fill {
+  animation: progression-reveal 2s ease-out 0.5s both;
+}
+
+.contact-card:hover .contact-card-glow {
+  opacity: 0.12;
+}
+
+.contact-card:hover .contact-icon {
+  filter: drop-shadow(0 0 14px var(--signal-color));
+  transform: scale(1.1);
+}
+
+.contact-icon {
+  transition: filter 0.3s ease, transform 0.3s ease;
+}
+
+/* ── Mobile Optimisations ── */
+@media (max-width: 768px) {
+  .scanline-overlay::after {
+    display: none;
+  }
+
+  .cyber-grid {
+    background-size: 30px 30px;
+  }
+}
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .glitch,
+  .glitch::before,
+  .glitch::after {
+    animation: none;
+  }
+
+  .neon-flicker {
+    animation: none;
+  }
+
+  .pulse-glow {
+    animation: none;
+  }
+
+  .hero-photo-pulse {
+    animation: none;
+    box-shadow: 0 0 20px var(--neon-purple-glow);
+  }
+
+  .hero-text-pulse {
+    animation: none;
+  }
+
+  .animated-border::before {
+    animation: none;
+  }
+
+  .neon-hr {
+    animation: none;
+  }
+
+  .progression-fill {
+    animation: none;
+    width: 100%;
+  }
+
+  .page-transition {
+    animation: none;
+  }
+
+  .scanline-overlay::after {
+    display: none;
+  }
+}
