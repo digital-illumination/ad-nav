@@ -27,7 +27,7 @@ const competencies = [
 const stats = [
   { value: "20+", label: "Years in Tech", color: "text-neon-purple" },
   { value: "4", label: "Teams Led", color: "text-neon-pink" },
-  { value: "300+", label: "Coordinated", color: "text-neon-cyan" },
+  { value: "300+", label: "Engineers Coordinated", color: "text-neon-cyan" },
   { value: "6", label: "AI Agents Built", color: "text-neon-purple" },
 ];
 
