@@ -113,13 +113,31 @@ export default function ContextPage() {
             </div>
           </div>
 
-          {/* Setup */}
+          {/* Remote setup */}
           <h3 className="text-sm font-mono font-bold text-neon-purple mb-2">
-            setup
+            remote_connector
           </h3>
           <p className="text-xs text-text-dim mb-3">
-            Works with any MCP-compatible client: Claude Code, Claude Desktop,
-            Cursor, Windsurf, Cline, Continue, and others.
+            // For claude.ai, Cowork, Claude Desktop — add as a custom connector.
+          </p>
+          <div className="mb-5">
+            <p className="text-xs font-mono text-text-dim mb-1">
+              // Streamable HTTP endpoint
+            </p>
+            <pre className="text-xs font-mono bg-black/40 rounded-lg p-3 overflow-x-auto border border-border-glow">
+              <code className="text-neon-cyan">
+                https://ad-nav.co.uk/api/mcp
+              </code>
+            </pre>
+          </div>
+
+          {/* Local stdio setup */}
+          <h3 className="text-sm font-mono font-bold text-neon-purple mb-2">
+            local_stdio
+          </h3>
+          <p className="text-xs text-text-dim mb-3">
+            // For Claude Code, Cursor, Windsurf, Cline, Continue — launches a
+            local process.
           </p>
           <div className="space-y-3">
             <div>

@@ -29,6 +29,7 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 | `/api/blog/[slug]` | GET | Single blog post by slug |
 | `/api/context` | GET | All context files. Supports `?files=identity,domain-knowledge` filter |
 | `/api/context/[file]` | GET | Single context file as raw markdown (`Content-Type: text/markdown`) |
+| `/api/mcp` | GET/POST/DELETE | Remote MCP endpoint (Streamable HTTP transport). Same tools and resources as the stdio server |
 | `/.well-known/ai-context.json` | GET | Agent discovery file pointing to API routes |
 | `/sitemap.xml` | GET | Auto-generated sitemap (static pages + blog posts) |
 | `/robots.txt` | GET | Crawler directives (allow all, disallow `/api/`) |
@@ -122,30 +123,45 @@ Global External HTTPS Load Balancer with Google-managed SSL. HTTP redirects to H
 
 ### MCP Server
 
-Standalone MCP server exposing the context portfolio to any MCP-compatible client (Claude Code, Claude Desktop, Cursor, Windsurf, Cline, Continue, etc.).
+The context portfolio is exposed to any MCP-compatible client (Claude Code, Claude Desktop, Cursor, Windsurf, Cline, Continue, claude.ai, Cowork, etc.) via two transports, both serving the same tools and resources.
 
-- **Location:** `mcp/` subdirectory with its own `package.json` and `tsconfig.json`
-- **Package:** `@adam-stacey/context-mcp` (private, not yet published)
-- **Transport:** stdio
-- **Content source:** Reads `content/context/*.md` from repo root (configurable via `CONTEXT_DIR` env var)
-
-**Resources:**
+**Resources (shared):**
 | URI Pattern | Description |
 |-------------|-------------|
 | `context://adam-stacey/{filename}` | Individual context file (template resource, lists all 10) |
 
-**Tools:**
+**Tools (shared):**
 | Tool | Description |
 |------|-------------|
 | `list_context_files` | List all files with titles and descriptions |
 | `search_context` | Full-text search across all context files |
 | `get_full_context` | Load entire portfolio as one document |
 
-**Configuration:**
-- Claude Code: `.mcp.json` in project root (project-scoped, auto-loaded)
-- Claude Desktop: Added to `~/Library/Application Support/Claude/claude_desktop_config.json`
+#### Local stdio server (`mcp/`)
 
-**Build:** `cd mcp && npm install && npm run build`
+For desktop clients that launch a child process.
+
+- **Location:** `mcp/` subdirectory with its own `package.json` and `tsconfig.json`
+- **Package:** `@adam-stacey/context-mcp` (private, not yet published)
+- **Transport:** stdio
+- **Content source:** `content/context/*.md` from repo root (override via `CONTEXT_DIR`)
+- **Build:** `cd mcp && npm install && npm run build`
+- **Configuration:**
+  - Claude Code: `.mcp.json` in project root (project-scoped, auto-loaded)
+  - Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+#### Remote HTTP endpoint (`/api/mcp`)
+
+For remote clients that add MCP servers as custom connectors (claude.ai, Cowork, Claude Desktop ≥ v0.9).
+
+- **URL:** `https://ad-nav.co.uk/api/mcp`
+- **Transport:** Streamable HTTP (stateless, JSON responses). Spec: [modelcontextprotocol.io](https://modelcontextprotocol.io/specification/draft/basic/transports#streamable-http)
+- **Methods:** `POST` (JSON-RPC requests), `GET` (SSE, unused in stateless mode), `DELETE` (no-op)
+- **Implementation:** `src/app/api/mcp/route.ts` using `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk`
+- **Server factory:** `src/lib/mcp-server.ts` — shared tool/resource definitions, uses `getContextFiles()` from `src/lib/content.ts`
+- **Auth:** Optional. Set `MCP_BEARER_TOKEN` on Cloud Run to require `Authorization: Bearer <token>` on every request. Unset = public.
+- **Statelessness:** Each request creates a fresh `McpServer` + transport. No session storage, no sticky routing — safe to scale to zero.
+- **Runtime:** Node.js (not Edge — the SDK uses Node APIs internally)
 
 ## Planned Work
 
@@ -154,7 +170,8 @@ Standalone MCP server exposing the context portfolio to any MCP-compatible clien
 - Cancel WPEngine hosting
 
 ### MCP Server (done)
-- Moved to Current State section below
+- Local stdio server in `mcp/`
+- Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless, optional bearer auth) — usable as a custom connector in claude.ai, Cowork, and Claude Desktop
 
 ### Blog Pipeline
 Remaining post ideas from interview prep material:

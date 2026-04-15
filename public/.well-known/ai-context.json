@@ -20,6 +20,13 @@
     ],
     "format": "markdown"
   },
+  "mcp": {
+    "description": "Remote MCP server exposing the same context portfolio via Streamable HTTP. Add as a custom connector in claude.ai, Cowork, or Claude Desktop.",
+    "endpoint": "/api/mcp",
+    "transport": "streamable-http",
+    "tools": ["list_context_files", "search_context", "get_full_context"],
+    "resources": ["context://adam-stacey/{filename}"]
+  },
   "blog": {
     "api_base": "/api/blog",
     "rss_feed": "/feed.xml",
