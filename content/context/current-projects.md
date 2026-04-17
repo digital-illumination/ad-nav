@@ -1,6 +1,8 @@
 ---
 title: Current Projects
-description: What Adam is actively working on right now — day job priorities, personal projects, learning commitments, and what's deliberately on the back burner.
+description: >-
+  What Adam is actively working on right now — day job priorities, personal
+  projects, learning commitments, and what's deliberately on the back burner.
 ---
 
 # Current Projects
@@ -80,3 +82,5 @@ A bike-flipping side project with my son — fuelled by our shared mountain biki
 ## What I'm Deliberately Saying No To
 
 - **More Salesforce consultancy work.** My existing consulting relationships are shifting naturally away from Salesforce and into the AI space, and I'm not taking on new Salesforce-specific engagements. The future of my side work is agentic AI, workflow automation, and RAG-based enrichment — not pure Salesforce admin / developer work.
+
+- MCP write path live 2026-04-17T14:25:40Z
