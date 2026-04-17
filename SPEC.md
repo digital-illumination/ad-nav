@@ -137,6 +137,11 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 | `search_context` | Full-text search across all context files |
 | `get_full_context` | Load entire portfolio as one document |
 
+**Write tool (remote only):**
+| Tool | Description |
+|------|-------------|
+| `append_to_context` | Append to (or replace the body of) an existing context file. Commits to GitHub via the Contents API. Preserves YAML frontmatter. `mode`: `append` (default) or `replace`. Requires bearer matching `MCP_WRITE_TOKEN`. Not exposed on the stdio server. |
+
 #### Local stdio server (`mcp/`)
 
 For desktop clients that launch a child process.
@@ -159,7 +164,13 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 - **Methods:** `POST` (JSON-RPC requests), `GET` (SSE, unused in stateless mode), `DELETE` (no-op)
 - **Implementation:** `src/app/api/mcp/route.ts` using `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk`
 - **Server factory:** `src/lib/mcp-server.ts` — shared tool/resource definitions, uses `getContextFiles()` from `src/lib/content.ts`
-- **Auth:** Optional. Set `MCP_BEARER_TOKEN` on Cloud Run to require `Authorization: Bearer <token>` on every request. Unset = public.
+- **Auth:**
+  - `MCP_BEARER_TOKEN` (optional): if set, every request must carry `Authorization: Bearer <token>`. Unset = reads public.
+  - `MCP_WRITE_TOKEN` (optional): gates the `append_to_context` tool only. The tool compares the presented bearer against this value. Unset = write tool is disabled. If both tokens are set and differ, the write token must be used (it has to pass the transport check first).
+- **GitHub write config (only for `append_to_context`):**
+  - `GITHUB_TOKEN`: PAT or GitHub App installation token with `contents:write` on the target repo.
+  - `GITHUB_REPO`: `owner/repo`, e.g. `digital-illumination/ad-nav`.
+  - `GITHUB_BRANCH` (optional): defaults to `main`.
 - **Statelessness:** Each request creates a fresh `McpServer` + transport. No session storage, no sticky routing — safe to scale to zero.
 - **Runtime:** Node.js (not Edge — the SDK uses Node APIs internally)
 
@@ -172,6 +183,7 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 ### MCP Server (done)
 - Local stdio server in `mcp/`
 - Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless, optional bearer auth) — usable as a custom connector in claude.ai, Cowork, and Claude Desktop
+- `append_to_context` write tool on the remote endpoint: commits changes directly to `content/context/*.md` via the GitHub Contents API, gated on `MCP_WRITE_TOKEN`
 
 ### Blog Pipeline
 Remaining post ideas from interview prep material:

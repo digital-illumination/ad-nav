@@ -13,8 +13,11 @@ export const dynamic = "force-dynamic";
  * - GET:  SSE stream for server-initiated notifications (not used in stateless mode)
  * - DELETE: session termination (no-op in stateless mode)
  *
- * Auth: if `MCP_BEARER_TOKEN` is set, requests must include
- *       `Authorization: Bearer <token>`. Otherwise the endpoint is public.
+ * Auth:
+ * - Transport level: if `MCP_BEARER_TOKEN` is set, every request must include
+ *   `Authorization: Bearer <token>`. Otherwise reads are public.
+ * - Tool level: the `append_to_context` write tool independently checks the
+ *   presented bearer against `MCP_WRITE_TOKEN`. Read tools ignore the header.
  */
 
 function unauthorized(): Response {
@@ -57,7 +60,9 @@ async function handle(req: Request): Promise<Response> {
     enableJsonResponse: true,
   });
 
-  const server = createContextMcpServer();
+  const server = createContextMcpServer({
+    authHeader: req.headers.get("authorization"),
+  });
 
   try {
     await server.connect(transport);
