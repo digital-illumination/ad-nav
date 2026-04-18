@@ -1,9 +1,31 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getContextFiles, getContextFile, type ContextFile } from "./content";
+import { SCOPE_CONTEXT_WRITE } from "./oauth";
+
+/**
+ * Identity resolved from the incoming request's bearer. Populated by the
+ * route handler, consumed by write-gated tools.
+ *
+ * - `isAdmin: true` means the request presented the static `MCP_WRITE_TOKEN`.
+ *   Admins bypass scope checks.
+ * - JWT-authenticated callers get their scopes populated from the token.
+ * - Anonymous callers (no bearer) get empty scopes; read-only tools still work.
+ */
+export interface AuthContext {
+  subject: string | null;
+  scopes: string[];
+  isAdmin: boolean;
+}
+
+export const ANONYMOUS_AUTH: AuthContext = {
+  subject: null,
+  scopes: [],
+  isAdmin: false,
+};
 
 export interface McpServerOptions {
-  authHeader?: string | null;
+  auth?: AuthContext;
 }
 
 const SERVER_INSTRUCTIONS = `This server hosts Adam Stacey's personal context portfolio. It follows a three-tier storage model. You must understand the tiers before using any write tool.
@@ -41,12 +63,12 @@ Privacy rules in the canonical context files (no real names for CtM colleagues, 
  * route. Adds a write path (`append_to_journal`) targeting the journal tier, a
  * curation helper (`propose_context_update`), and agent guidance primitives.
  *
- * `authHeader` is the raw `Authorization` header from the incoming request. Read
- * tools ignore it. The `append_to_journal` write tool compares the presented
- * bearer against `MCP_WRITE_TOKEN` and refuses if they don't match.
+ * Auth is resolved upstream (route handler) into an `AuthContext`. Read tools
+ * ignore it. `append_to_journal` requires either `isAdmin` (static bearer) or
+ * the `context:write` scope (OAuth-issued JWT).
  */
 export function createContextMcpServer(options: McpServerOptions = {}): McpServer {
-  const { authHeader } = options;
+  const auth = options.auth ?? ANONYMOUS_AUTH;
 
   const server = new McpServer(
     {
@@ -302,7 +324,7 @@ This does NOT write to canonical context files. Those are human-edited.`,
         ),
     },
     async (args) => {
-      return appendToJournal({ authHeader, ...args });
+      return appendToJournal({ auth, ...args });
     }
   );
 
@@ -353,12 +375,6 @@ function toolError(text: string) {
   };
 }
 
-function extractBearer(header: string | null | undefined): string | null {
-  if (!header) return null;
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
-}
-
 // --- Session logging guide content ---
 
 const SESSION_LOGGING_GUIDE = `# Session Logging Guide
@@ -406,7 +422,7 @@ Ask Adam: "Worth logging this session?" Then act on his answer. Never log silent
 // --- append_to_journal implementation ---
 
 interface AppendJournalArgs {
-  authHeader: string | null | undefined;
+  auth: AuthContext;
   summary: string;
   decisions: string[];
   patterns: string[];
@@ -481,15 +497,9 @@ description: Raw session observations for later review. Append-only, agent-writa
 }
 
 async function appendToJournal(args: AppendJournalArgs) {
-  const writeToken = process.env.MCP_WRITE_TOKEN;
-  if (!writeToken) {
-    return toolError("append_to_journal is disabled: MCP_WRITE_TOKEN is not set on the server.");
-  }
-
-  const presented = extractBearer(args.authHeader);
-  if (!presented || presented !== writeToken) {
+  if (!args.auth.isAdmin && !args.auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
     return toolError(
-      "Unauthorized: append_to_journal requires Authorization: Bearer <MCP_WRITE_TOKEN>."
+      `Unauthorized: append_to_journal requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
     );
   }
 

@@ -235,11 +235,13 @@ Delivery is split into four chunks. This section tracks progress.
 - Firestore collections: `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens` (all added in chunk 2)
 - Env vars used: `OAUTH_JWT_SECRET` (secret), existing `OAUTH_ALLOWLIST` / GitHub creds from chunk 1
 
-**Chunk 3 — Resource server gating (planned).**
-- `/api/mcp` accepts JWT access tokens OR the static `MCP_WRITE_TOKEN`
-- `createContextMcpServer` receives resolved identity and scopes
-- `append_to_journal` requires `context:write` scope (or the admin bearer)
-- Reads stay public
+**Chunk 3 — Resource server gating (done).**
+- `/api/mcp` now resolves the presented bearer into an `AuthContext`: admin (matches `MCP_WRITE_TOKEN`), JWT holder (verified against `OAUTH_JWT_SECRET` with issuer/audience checks), or anonymous
+- Presented-but-invalid bearers get a 401 with RFC 6750 `WWW-Authenticate` header including `error_description`
+- `createContextMcpServer({ auth })` receives the resolved context; exported `AuthContext` and `ANONYMOUS_AUTH` types
+- `append_to_journal` requires `isAdmin` OR the `context:write` scope; the inline `MCP_WRITE_TOKEN` check moved upstream to the route handler
+- Reads (list/search/get/propose/session_logging_guide) remain public
+- Backward compatibility: Claude Code keeps working with the static `MCP_WRITE_TOKEN` bearer exactly as before
 
 **Chunk 4 — End-to-end verification + SPEC rewrite (planned).**
 
