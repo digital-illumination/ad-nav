@@ -1,32 +1,62 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import matter from "gray-matter";
-import { getContextFiles, getContextFile } from "./content";
+import { getContextFiles, getContextFile, type ContextFile } from "./content";
 
 export interface McpServerOptions {
   authHeader?: string | null;
 }
 
+const SERVER_INSTRUCTIONS = `This server hosts Adam Stacey's personal context portfolio. It follows a three-tier storage model. You must understand the tiers before using any write tool.
+
+TIER 1 — SESSION (not your concern)
+  The live conversation with Adam. Ephemeral. Nothing here.
+
+TIER 2 — JOURNAL (agent-writable, append-only)
+  Files under content/journal/*.md. A rolling log of session observations written via the \`append_to_journal\` tool. Cheap signal capture. One entry per meaningful session. You may write here.
+
+TIER 3 — CANONICAL CONTEXT (human-edited, do not write)
+  Files under content/context/*.md. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them.
+
+WHEN TO LOG A SESSION
+  At a natural close, or when a meaningful point is reached (a decision made, a preference revealed, a problem solved, follow-ups generated). If the session was trivial, do not log. If in doubt, ask Adam or call \`session_logging_guide\`. Never log without offering first, unless Adam has explicitly said "log this".
+
+TOOLS
+  Reads (public):
+    - list_context_files, search_context, get_full_context: browse the canonical portfolio
+    - propose_context_update: analyse a summary against existing files before any write
+    - session_logging_guide: rules for when and what to log to the journal
+  Writes (require MCP_WRITE_TOKEN):
+    - append_to_journal: append a structured session entry to content/journal/YYYY-MM.md
+  Prompts (user-triggered):
+    - log-session: slash-command template that instructs you to summarise and log the current session
+
+Privacy rules in the canonical context files (no real names for CtM colleagues, no Digital Illumination client names, etc.) apply equally to journal entries. The journal is public once committed.`;
+
 /**
  * Build a configured `McpServer` instance exposing Adam's context portfolio.
  *
- * Returns a fresh server each call — callers own the lifecycle (connect transport,
- * close when done). Identical read tools and resources to the stdio server in `mcp/`,
- * but uses the Next.js `content.ts` loaders so it works inside an App Router route.
+ * Returns a fresh server each call. Callers own the lifecycle (connect transport,
+ * close when done). Same read tools and resources as the stdio server in `mcp/`,
+ * but backed by the Next.js `content.ts` loaders so it works inside an App Router
+ * route. Adds a write path (`append_to_journal`) targeting the journal tier, a
+ * curation helper (`propose_context_update`), and agent guidance primitives.
  *
  * `authHeader` is the raw `Authorization` header from the incoming request. Read
- * tools ignore it. The `append_to_context` write tool compares the presented
+ * tools ignore it. The `append_to_journal` write tool compares the presented
  * bearer against `MCP_WRITE_TOKEN` and refuses if they don't match.
  */
 export function createContextMcpServer(options: McpServerOptions = {}): McpServer {
   const { authHeader } = options;
 
-  const server = new McpServer({
-    name: "adam-stacey-context",
-    version: "1.0.0",
-    description:
-      "Personal context portfolio for Adam Stacey. Provides structured context files covering identity, expertise, communication style, and working preferences for AI agents acting on his behalf.",
-  });
+  const server = new McpServer(
+    {
+      name: "adam-stacey-context",
+      version: "1.1.0",
+    },
+    {
+      instructions: SERVER_INSTRUCTIONS,
+    }
+  );
 
   // --- Resources ---
 
@@ -63,7 +93,7 @@ export function createContextMcpServer(options: McpServerOptions = {}): McpServe
     }
   );
 
-  // --- Tools ---
+  // --- Read tools ---
 
   server.tool(
     "list_context_files",
@@ -183,30 +213,133 @@ export function createContextMcpServer(options: McpServerOptions = {}): McpServe
   );
 
   server.tool(
-    "append_to_context",
-    "Append to or replace the body of a context portfolio file. Commits directly to the repo on GitHub. Requires a bearer token matching MCP_WRITE_TOKEN. Frontmatter (title, description) is always preserved.",
+    "propose_context_update",
+    "Analyse a session summary or new fact against the canonical context portfolio. Returns ranked candidate files plus the passages within them that overlap with the topic. Read-only. Intended for a curator agent deciding whether an observation has matured enough to warrant a PR against canonical files. For session-level logging, use append_to_journal instead.",
     {
-      filename: z
+      summary: z
         .string()
         .describe(
-          "Context file name without the .md extension, e.g. 'current-projects'. Must match an existing file."
+          "Free-text session summary, new fact, or claim to consider for canonical promotion."
         ),
-      content: z
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .default(3)
+        .describe("How many candidate files to return with detailed snippets. Default 3."),
+      snippet_budget: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(6)
+        .describe("Max relevant paragraphs per candidate file. Default 6."),
+    },
+    async ({ summary, top_k, snippet_budget }) => {
+      return proposeContextUpdate({ summary, topK: top_k, snippetBudget: snippet_budget });
+    }
+  );
+
+  // --- Agent guidance ---
+
+  server.tool(
+    "session_logging_guide",
+    "Return the rules for when and how to log a session to Adam's journal. Call this if you are unsure whether a session is worth logging, or to refresh the format before calling append_to_journal.",
+    async () => {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: SESSION_LOGGING_GUIDE,
+          },
+        ],
+      };
+    }
+  );
+
+  // --- Write tool (journal tier) ---
+
+  server.tool(
+    "append_to_journal",
+    `Append a structured session entry to Adam's journal (content/journal/YYYY-MM.md). Writes via the GitHub Contents API. Requires a bearer token matching MCP_WRITE_TOKEN.
+
+WHEN TO USE: at a natural close of a session when something non-trivial happened (a decision, a revealed preference, a problem explored, follow-ups generated). Offer first, do not log silently unless Adam asked.
+
+WHEN NOT TO USE: trivial sessions, mid-task, or to capture granular activity. The journal is about distillable signal, not a task log. If unsure, call session_logging_guide first.
+
+This does NOT write to canonical context files. Those are human-edited.`,
+    {
+      summary: z
         .string()
+        .min(50)
         .describe(
-          "Markdown to append, or (in replace mode) the full new body. Do not include frontmatter — it is preserved automatically."
+          "2-4 sentence overview of what the session was about and its most important outcome. Written in third person about Adam if possible, or in first person as Adam if natural."
         ),
-      mode: z
-        .enum(["append", "replace"])
-        .default("append")
-        .describe("'append' (default) adds to the end of the body; 'replace' overwrites the body entirely."),
-      message: z
+      decisions: z
+        .array(z.string())
+        .default([])
+        .describe("Non-obvious choices made or opinions formed during the session. Optional."),
+      patterns: z
+        .array(z.string())
+        .default([])
+        .describe(
+          "Preferences, working-style signals, or values revealed. Candidate material for later promotion to canonical context. Optional."
+        ),
+      followups: z
+        .array(z.string())
+        .default([])
+        .describe("Things left unfinished or to revisit in a future session. Optional."),
+      tags: z
+        .array(z.string())
+        .default([])
+        .describe("Free-form tags for cross-reference (e.g. 'mcp', 'cloud-run'). Optional."),
+      agent: z
         .string()
         .optional()
-        .describe("Optional commit message. Defaults to 'Update <file> via MCP (<mode>)'."),
+        .describe(
+          "Client name, e.g. 'Claude Code', 'claude.ai', 'Cowork'. Optional. Defaults to 'unknown'."
+        ),
     },
-    async ({ filename, content, mode, message }) => {
-      return writeContextFile({ authHeader, filename, content, mode, message });
+    async (args) => {
+      return appendToJournal({ authHeader, ...args });
+    }
+  );
+
+  // --- Prompts (user-triggered) ---
+
+  server.prompt(
+    "log-session",
+    "Summarise the current session and log it to Adam's journal. Use at the end of a meaningful session to capture what happened.",
+    async () => {
+      return {
+        description: "Log the current session to Adam's journal.",
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: `Please summarise this session and log it to Adam's journal.
+
+Step 1: call \`session_logging_guide\` if you need the current rules for what belongs in a journal entry.
+
+Step 2: check whether the session is worth logging. If the session was trivial (a quick question, a small edit with no broader signal), stop and tell Adam "nothing worth logging". Otherwise continue.
+
+Step 3: call \`append_to_journal\` with these fields:
+  - summary: 2-4 sentences, what the session was about and the key outcome
+  - decisions: non-obvious choices or opinions formed (array, can be empty)
+  - patterns: preferences or working-style signals revealed, as candidates for canonical promotion (array, can be empty)
+  - followups: things left unfinished (array, can be empty)
+  - tags: free-form tags for cross-reference (array, can be empty)
+  - agent: the name of the client you are running in, if you know it
+
+Respect the privacy rules: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets.
+
+After the tool returns, show Adam the commit link so he can review.`,
+            },
+          },
+        ],
+      };
     }
   );
 
@@ -226,32 +359,137 @@ function extractBearer(header: string | null | undefined): string | null {
   return match ? match[1].trim() : null;
 }
 
-interface WriteArgs {
+// --- Session logging guide content ---
+
+const SESSION_LOGGING_GUIDE = `# Session Logging Guide
+
+## When to log
+
+Log this session to the journal if ANY of these are true:
+- A non-trivial decision was made, especially with reasoning worth remembering
+- A preference or working-style signal was revealed (architecture taste, risk tolerance, voice)
+- A new problem was explored or a technical direction was set
+- Follow-up work was generated that Adam will want to revisit
+- Something surprised Adam or changed his mind
+
+## When NOT to log
+
+- Trivial sessions (quick questions, small edits, one-line answers)
+- Nothing non-obvious happened
+- Adam explicitly said "don't log this"
+- You are not at a natural close yet (wait for the session to wrap up)
+
+## Where to log
+
+Call \`append_to_journal\`. The server routes to content/journal/YYYY-MM.md for the current month. You do not pick the path.
+
+## Fields
+
+- **summary** (required, ≥50 chars): 2-4 sentence overview. What was the session about? What was the key outcome?
+- **decisions** (optional array): choices or opinions that weren't obvious going in
+- **patterns** (optional array): preferences or traits revealed. These are candidates for later promotion to canonical context files, so write them at the right altitude. "Adam prefers X over Y in situation Z" is better than "Adam chose X today".
+- **followups** (optional array): things to revisit
+- **tags** (optional array): terms for cross-reference
+
+## Voice
+
+Third person about Adam ("Adam decided...", "Adam prefers...") OR first person as Adam if that reads more naturally. Do not write in agent-voice ("I helped Adam do..."). The journal is about Adam, not about you.
+
+## Privacy
+
+The privacy rules in SPEC.md apply: no real names for Compare the Market colleagues, no Digital Illumination client names, no operational secrets.
+
+## When in doubt
+
+Ask Adam: "Worth logging this session?" Then act on his answer. Never log silently unless he explicitly delegated the decision.`;
+
+// --- append_to_journal implementation ---
+
+interface AppendJournalArgs {
   authHeader: string | null | undefined;
-  filename: string;
-  content: string;
-  mode: "append" | "replace";
-  message?: string;
+  summary: string;
+  decisions: string[];
+  patterns: string[];
+  followups: string[];
+  tags: string[];
+  agent?: string;
 }
 
-async function writeContextFile({ authHeader, filename, content, mode, message }: WriteArgs) {
+function currentMonthSlug(now: Date = new Date()): string {
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function currentMonthTitle(now: Date = new Date()): string {
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  return `${months[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+}
+
+function isoMinutes(now: Date = new Date()): string {
+  // 2026-04-18T09:45Z (no seconds or ms, UTC)
+  return now.toISOString().replace(/:\d{2}\.\d{3}Z$/, "Z");
+}
+
+function formatJournalEntry(args: Omit<AppendJournalArgs, "authHeader">, now: Date = new Date()): string {
+  const ts = isoMinutes(now);
+  const agent = (args.agent && args.agent.trim()) || "unknown";
+
+  const lines: string[] = [];
+  lines.push(`## ${ts} — ${agent}`);
+  lines.push("");
+  lines.push(`**Summary:** ${args.summary.trim()}`);
+  lines.push("");
+
+  if (args.decisions.length > 0) {
+    lines.push("**Decisions:**");
+    for (const d of args.decisions) lines.push(`- ${d.trim()}`);
+    lines.push("");
+  }
+  if (args.patterns.length > 0) {
+    lines.push("**Patterns:**");
+    for (const p of args.patterns) lines.push(`- ${p.trim()}`);
+    lines.push("");
+  }
+  if (args.followups.length > 0) {
+    lines.push("**Follow-ups:**");
+    for (const f of args.followups) lines.push(`- ${f.trim()}`);
+    lines.push("");
+  }
+  if (args.tags.length > 0) {
+    lines.push(`**Tags:** ${args.tags.map((t) => t.trim()).join(", ")}`);
+    lines.push("");
+  }
+  lines.push("---");
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function newMonthlyFile(monthTitle: string): string {
+  return `---
+title: Journal — ${monthTitle}
+description: Raw session observations for later review. Append-only, agent-writable. Promoted to canonical context via human-reviewed PRs.
+---
+
+# Journal — ${monthTitle}
+
+`;
+}
+
+async function appendToJournal(args: AppendJournalArgs) {
   const writeToken = process.env.MCP_WRITE_TOKEN;
   if (!writeToken) {
-    return toolError(
-      "append_to_context is disabled: MCP_WRITE_TOKEN is not set on the server."
-    );
+    return toolError("append_to_journal is disabled: MCP_WRITE_TOKEN is not set on the server.");
   }
 
-  const presented = extractBearer(authHeader);
+  const presented = extractBearer(args.authHeader);
   if (!presented || presented !== writeToken) {
     return toolError(
-      "Unauthorized: append_to_context requires Authorization: Bearer <MCP_WRITE_TOKEN>."
-    );
-  }
-
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(filename)) {
-    return toolError(
-      "Invalid filename. Use lowercase letters, digits, and hyphens only (no .md extension, no path separators)."
+      "Unauthorized: append_to_journal requires Authorization: Bearer <MCP_WRITE_TOKEN>."
     );
   }
 
@@ -265,53 +503,56 @@ async function writeContextFile({ authHeader, filename, content, mode, message }
     );
   }
 
-  const filePath = `content/context/${filename}.md`;
+  const now = new Date();
+  const monthSlug = currentMonthSlug(now);
+  const monthTitle = currentMonthTitle(now);
+  const filePath = `content/journal/${monthSlug}.md`;
   const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
-  const ghHeaders = {
+
+  const ghHeaders: Record<string, string> = {
     Authorization: `Bearer ${githubToken}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "ad-nav-mcp",
   };
 
+  // GET current file (if any)
   const getRes = await fetch(`${apiBase}?ref=${encodeURIComponent(branch)}`, {
     headers: ghHeaders,
   });
 
-  if (getRes.status === 404) {
-    return toolError(
-      `File not found: ${filePath} on branch ${branch}. append_to_context only edits existing context files.`
-    );
-  }
-  if (!getRes.ok) {
+  let existingContent = "";
+  let sha: string | undefined;
+
+  if (getRes.status === 200) {
+    const fileJson = (await getRes.json()) as { content: string; sha: string; encoding: string };
+    if (fileJson.encoding !== "base64") {
+      return toolError(`Unexpected GitHub encoding: ${fileJson.encoding}`);
+    }
+    existingContent = Buffer.from(fileJson.content, "base64").toString("utf-8");
+    sha = fileJson.sha;
+  } else if (getRes.status === 404) {
+    existingContent = newMonthlyFile(monthTitle);
+  } else {
     return toolError(`GitHub GET failed (${getRes.status}): ${await getRes.text()}`);
   }
 
-  const fileJson = (await getRes.json()) as { content: string; sha: string; encoding: string };
-  if (fileJson.encoding !== "base64") {
-    return toolError(`Unexpected GitHub encoding: ${fileJson.encoding}`);
-  }
+  const entry = formatJournalEntry(args, now);
+  const newRaw = existingContent.endsWith("\n")
+    ? `${existingContent}${entry}`
+    : `${existingContent}\n${entry}`;
 
-  const currentRaw = Buffer.from(fileJson.content, "base64").toString("utf-8");
-  const parsed = matter(currentRaw);
-
-  const incoming = content.trim();
-  const newBody =
-    mode === "append"
-      ? `${parsed.content.trimEnd()}\n\n${incoming}\n`
-      : `${incoming}\n`;
-
-  const newRaw = matter.stringify(newBody, parsed.data);
+  const putBody: Record<string, unknown> = {
+    message: `Journal entry ${isoMinutes(now)} via MCP`,
+    content: Buffer.from(newRaw, "utf-8").toString("base64"),
+    branch,
+  };
+  if (sha) putBody.sha = sha;
 
   const putRes = await fetch(apiBase, {
     method: "PUT",
     headers: { ...ghHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: message ?? `Update ${filePath} via MCP (${mode})`,
-      content: Buffer.from(newRaw, "utf-8").toString("base64"),
-      sha: fileJson.sha,
-      branch,
-    }),
+    body: JSON.stringify(putBody),
   });
 
   if (!putRes.ok) {
@@ -324,8 +565,164 @@ async function writeContextFile({ authHeader, filename, content, mode, message }
     content: [
       {
         type: "text" as const,
-        text: `Committed ${mode} to ${filePath} on ${branch}.\nCommit: ${putJson.commit.sha}\n${putJson.commit.html_url}`,
+        text: `Logged session to ${filePath} on ${branch}.
+Commit: ${putJson.commit.sha}
+${putJson.commit.html_url}`,
       },
     ],
+  };
+}
+
+// --- propose_context_update implementation ---
+
+const STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be", "been",
+  "being", "to", "of", "in", "on", "at", "for", "by", "with", "as", "from", "that",
+  "this", "it", "its", "i", "you", "he", "she", "we", "they", "them", "their",
+  "his", "her", "my", "our", "me", "us", "have", "has", "had", "do", "does", "did",
+  "will", "would", "should", "could", "can", "may", "might", "must", "not", "no",
+  "so", "if", "then", "than", "too", "very", "just", "also", "only", "about",
+  "into", "out", "up", "down", "over", "under", "more", "less", "one", "two",
+  "some", "any", "all", "each", "every", "most", "least", "there", "here",
+  "where", "when", "what", "which", "who", "how", "why",
+]);
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 3 && !STOPWORDS.has(t))
+  );
+}
+
+function scoreFile(queryTerms: Set<string>, file: ContextFile): number {
+  const titleTerms = tokenize(file.title);
+  const descTerms = tokenize(file.description);
+  const contentTerms = tokenize(file.content);
+  let score = 0;
+  for (const term of queryTerms) {
+    if (titleTerms.has(term)) score += 3;
+    if (descTerms.has(term)) score += 2;
+    if (contentTerms.has(term)) score += 1;
+  }
+  return score;
+}
+
+function topParagraphs(content: string, queryTerms: Set<string>, budget: number): string[] {
+  const paragraphs = content
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  const scored = paragraphs
+    .map((p) => {
+      const pTerms = tokenize(p);
+      let hits = 0;
+      for (const term of queryTerms) {
+        if (pTerms.has(term)) hits++;
+      }
+      return { p, hits };
+    })
+    .filter((x) => x.hits > 0);
+
+  scored.sort((a, b) => b.hits - a.hits);
+  return scored.slice(0, budget).map((x) => x.p);
+}
+
+interface ProposeArgs {
+  summary: string;
+  topK: number;
+  snippetBudget: number;
+}
+
+async function proposeContextUpdate({ summary, topK, snippetBudget }: ProposeArgs) {
+  const files = getContextFiles();
+  if (files.length === 0) {
+    return {
+      content: [{ type: "text" as const, text: "No context files loaded." }],
+    };
+  }
+
+  const queryTerms = tokenize(summary);
+  if (queryTerms.size === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "Summary produced no usable search terms (too short, or entirely stop-words). Provide more detail.",
+        },
+      ],
+    };
+  }
+
+  const scored = files
+    .map((f) => ({ file: f, score: scoreFile(queryTerms, f) }))
+    .sort((a, b) => b.score - a.score);
+
+  const candidates = scored.filter((s) => s.score > 0).slice(0, topK);
+  const candidateNames = new Set(candidates.map((c) => c.file.filename));
+  const rest = files.filter((f) => !candidateNames.has(f.filename));
+
+  const sections = candidates.map((c, i) => {
+    const snippets = topParagraphs(c.file.content, queryTerms, snippetBudget);
+    const snippetBlock =
+      snippets.length > 0
+        ? snippets.map((s) => `> ${s.replace(/\n/g, "\n> ")}`).join("\n\n")
+        : "_(matched only on title or description, no body paragraphs overlapped)_";
+    return `### ${i + 1}. \`${c.file.filename}\` (score ${c.score})
+
+**Title:** ${c.file.title}
+**Description:** ${c.file.description}
+
+**Relevant existing content:**
+
+${snippetBlock}`;
+  });
+
+  const restListing =
+    rest.length > 0
+      ? rest.map((f) => `- \`${f.filename}\`: ${f.description}`).join("\n")
+      : "_(all files were candidates)_";
+
+  const termPreview = Array.from(queryTerms).slice(0, 20).join(", ");
+  const termOverflow = queryTerms.size > 20 ? ` (+${queryTerms.size - 20} more)` : "";
+
+  const summaryPreview =
+    summary.length > 200 ? `${summary.slice(0, 200)}...` : summary;
+
+  const candidatesBlock =
+    candidates.length > 0
+      ? sections.join("\n\n")
+      : "_No files scored above zero. The summary does not overlap with any existing content. If worth keeping, it belongs in a new file, which is a human decision, not an agent one._";
+
+  const text = [
+    `# Context update proposal`,
+    ``,
+    `**Summary considered:** ${summaryPreview}`,
+    ``,
+    `**Search terms extracted:** ${termPreview}${termOverflow}`,
+    ``,
+    `## Candidate files (ranked by keyword overlap)`,
+    ``,
+    candidatesBlock,
+    ``,
+    `## Other files (for reference)`,
+    ``,
+    restListing,
+    ``,
+    `---`,
+    ``,
+    `## Next steps`,
+    ``,
+    `This tool is for a CURATOR pass, not session-level logging. If you are ending a session, call \`append_to_journal\` instead. If you are reviewing journal material for promotion to canonical context:`,
+    ``,
+    `- If a pattern is durable and well-supported, raise a PR against the most-relevant canonical file above.`,
+    `- If the signal only appeared once, leave it in the journal and wait.`,
+    `- Never write to canonical files directly from this tool's output.`,
+  ].join("\n");
+
+  return {
+    content: [{ type: "text" as const, text }],
   };
 }

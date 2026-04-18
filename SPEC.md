@@ -40,7 +40,8 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 ### Content System
 
 - **Blog posts:** `content/blog/*.md` with YAML frontmatter (`title`, `date`, `excerpt`, `tags`, `image`)
-- **Context files:** `content/context/*.md` with YAML frontmatter (`title`, `description`)
+- **Context files (canonical):** `content/context/*.md` with YAML frontmatter (`title`, `description`). Human-edited. Never written directly by agents.
+- **Journal (working memory):** `content/journal/YYYY-MM.md`, one file per calendar month. Agent-writable append-only log of session observations via the `append_to_journal` MCP tool. Not part of any canonical profile. Used as source material for future curation passes.
 - **Loader:** `src/lib/content.ts` reads markdown, parses with gray-matter, calculates reading time
 - **Renderer:** remark + remark-html, styled via `.prose-cyberpunk` CSS class in globals.css
 
@@ -130,17 +131,34 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 |-------------|-------------|
 | `context://adam-stacey/{filename}` | Individual context file (template resource, lists all 10) |
 
-**Tools (shared):**
+**Tools (shared read):**
 | Tool | Description |
 |------|-------------|
-| `list_context_files` | List all files with titles and descriptions |
-| `search_context` | Full-text search across all context files |
-| `get_full_context` | Load entire portfolio as one document |
+| `list_context_files` | List all canonical files with titles and descriptions |
+| `search_context` | Full-text search across all canonical context files |
+| `get_full_context` | Load entire canonical portfolio as one document |
 
-**Write tool (remote only):**
+**Curation tool (remote only, read):**
 | Tool | Description |
 |------|-------------|
-| `append_to_context` | Append to (or replace the body of) an existing context file. Commits to GitHub via the Contents API. Preserves YAML frontmatter. `mode`: `append` (default) or `replace`. Requires bearer matching `MCP_WRITE_TOKEN`. Not exposed on the stdio server. |
+| `propose_context_update` | Given a session summary or new fact, return ranked canonical candidate files and the relevant paragraphs inside them. Read-only. Intended for a future curator agent deciding whether journal signal has matured enough to warrant a PR against canonical files. Ranks by keyword overlap (title ×3, description ×2, body ×1), filters stop-words. |
+
+**Agent guidance (remote only, read):**
+| Tool | Description |
+|------|-------------|
+| `session_logging_guide` | Return the rules for when and what to log to the journal. Agents call this to refresh the format or decide if a session is worth logging. |
+
+**Journal write tool (remote only, authenticated):**
+| Tool | Description |
+|------|-------------|
+| `append_to_journal` | Append a structured session entry to `content/journal/YYYY-MM.md` for the current UTC month. Creates the month file if it doesn't exist. Commits via the GitHub Contents API. Requires bearer matching `MCP_WRITE_TOKEN`. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent` (all optional). Does NOT write to canonical files. |
+
+**Prompts (remote only, user-triggered):**
+| Prompt | Description |
+|--------|-------------|
+| `log-session` | Slash-command template that instructs the agent to summarise the current session and call `append_to_journal`. Surfaces as `/log-session` in clients like Claude Desktop. |
+
+**Server-level instructions.** The remote server sets the MCP `instructions` field on connect, advising every client of the three-tier model (session / journal / canonical) and pointing at `session_logging_guide` for details. No client-side config needed.
 
 #### Local stdio server (`mcp/`)
 
@@ -181,9 +199,19 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 - Cancel WPEngine hosting
 
 ### MCP Server (done)
-- Local stdio server in `mcp/`
-- Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless, optional bearer auth) — usable as a custom connector in claude.ai, Cowork, and Claude Desktop
-- `append_to_context` write tool on the remote endpoint: commits changes directly to `content/context/*.md` via the GitHub Contents API, gated on `MCP_WRITE_TOKEN`
+- Local stdio server in `mcp/` with read tools + resources
+- Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless, optional bearer auth): usable as a custom connector in claude.ai, Cowork, Claude Desktop
+- Three-tier storage model: live session (ephemeral) → journal (agent-writable append-only log) → canonical context (human-edited)
+- `append_to_journal` write tool on the remote endpoint: appends structured session entries to `content/journal/YYYY-MM.md` via the GitHub Contents API, gated on `MCP_WRITE_TOKEN`. Creates monthly files on first write.
+- `session_logging_guide` tool: serves the current rules for when and how to log
+- `log-session` prompt: user-triggered slash-command template for manual session logging
+- Server-level MCP `instructions` field: every client is told the tier model on connect
+- `propose_context_update` curation tool: ranks candidate files and surfaces relevant paragraphs. Read-only, designed for a future curator pass.
+
+### Context Curation (planned)
+- Scheduled curator agent: reads accumulated journal entries, calls `propose_context_update`, drafts changes to a branch, opens a PR against canonical files. Human approval always in the loop. Deferred until the journal has a month or two of material.
+- Section-level edit tool (`replace_section_in_context`): surgical edits within canonical files without replacing whole bodies. Needs a stable anchor mechanism (headings or line ranges). Only relevant once the curator flow exists.
+- Client-side hook on Claude Code (`Stop` hook) to auto-trigger `log-session` at the end of a session. Claude Code-specific; other clients rely on server instructions or manual prompting.
 
 ### Blog Pipeline
 Remaining post ideas from interview prep material:
