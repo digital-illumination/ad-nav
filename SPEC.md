@@ -208,6 +208,38 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 - Server-level MCP `instructions` field: every client is told the tier model on connect
 - `propose_context_update` curation tool: ranks candidate files and surfaces relevant paragraphs. Read-only, designed for a future curator pass.
 
+### OAuth 2.1 for remote MCP (in progress)
+
+Background: Claude Desktop and other MCP clients expect OAuth 2.1 for remote authenticated connectors. The static `MCP_WRITE_TOKEN` covers Claude Code today, but does not satisfy Claude Desktop's connector UI. Adding OAuth alongside (not replacing) the static token lets any compliant client authenticate.
+
+Delivery is split into four chunks. This section tracks progress.
+
+**Chunk 1 — Identity foundation (done).** GitHub OAuth as upstream identity provider. Env-var allowlist. Firestore-backed browser sessions.
+- `src/lib/firestore.ts` — singleton client, ADC on Cloud Run
+- `src/lib/session.ts` — Firestore-backed sessions keyed on an httpOnly cookie
+- `src/lib/github-oauth.ts` — upstream OAuth helpers (authorize URL, code exchange, user fetch)
+- `src/lib/allowlist.ts` — `OAUTH_ALLOWLIST` env var, comma-separated GitHub logins, fail-closed
+- `/api/oauth/signin` — kicks off GitHub flow, stores state cookie for CSRF
+- `/api/oauth/callback/github` — verifies state, exchanges code, checks allowlist, creates session
+- `/api/oauth/me` — returns current session (for verification)
+- `/api/oauth/signout` — destroys session
+- Firestore collections: `sessions`
+
+**Chunk 2 — OAuth 2.1 server endpoints (planned).**
+- `/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource` metadata
+- `/api/oauth/register` dynamic client registration
+- `/api/oauth/authorize` consent page + authorization code issuance with PKCE
+- `/api/oauth/token` exchange codes for JWT access tokens + opaque refresh tokens
+- Firestore collections: `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens`
+
+**Chunk 3 — Resource server gating (planned).**
+- `/api/mcp` accepts JWT access tokens OR the static `MCP_WRITE_TOKEN`
+- `createContextMcpServer` receives resolved identity and scopes
+- `append_to_journal` requires `context:write` scope (or the admin bearer)
+- Reads stay public
+
+**Chunk 4 — End-to-end verification + SPEC rewrite (planned).**
+
 ### Context Curation (planned)
 - Scheduled curator agent: reads accumulated journal entries, calls `propose_context_update`, drafts changes to a branch, opens a PR against canonical files. Human approval always in the loop. Deferred until the journal has a month or two of material.
 - Section-level edit tool (`replace_section_in_context`): surgical edits within canonical files without replacing whole bodies. Needs a stable anchor mechanism (headings or line ranges). Only relevant once the curator flow exists.
