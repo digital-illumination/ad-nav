@@ -225,12 +225,15 @@ Delivery is split into four chunks. This section tracks progress.
 - `/api/oauth/signout` — destroys session
 - Firestore collections: `sessions`
 
-**Chunk 2 — OAuth 2.1 server endpoints (planned).**
-- `/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource` metadata
-- `/api/oauth/register` dynamic client registration
-- `/api/oauth/authorize` consent page + authorization code issuance with PKCE
-- `/api/oauth/token` exchange codes for JWT access tokens + opaque refresh tokens
-- Firestore collections: `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens`
+**Chunk 2 — OAuth 2.1 server endpoints (done).**
+- `/.well-known/oauth-authorization-server` (RFC 8414) and `/.well-known/oauth-protected-resource` (RFC 9728) metadata, served via Next.js rewrites to `/api/oauth/metadata/...`
+- `/api/oauth/register` — dynamic client registration (RFC 7591). Defaults to public client + PKCE (no client secret).
+- `/api/oauth/authorize` — GET renders a consent page in the site aesthetic, POST processes approve/deny. Validates client_id, redirect_uri, PKCE challenge, scopes. Redirects to `/api/oauth/signin?return_to=...` when no session.
+- `/api/oauth/token` — `authorization_code` and `refresh_token` grants. Refresh tokens rotate on use.
+- `src/lib/oauth.ts` — JWT (HS256) signing/verification, PKCE verifier, scope constants (`context:read`, `context:write`), opaque token generator, HTML escape
+- `src/lib/oauth-storage.ts` — Firestore ops for `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens`; atomic code consumption via transaction
+- Firestore collections: `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens` (all added in chunk 2)
+- Env vars used: `OAUTH_JWT_SECRET` (secret), existing `OAUTH_ALLOWLIST` / GitHub creds from chunk 1
 
 **Chunk 3 — Resource server gating (planned).**
 - `/api/mcp` accepts JWT access tokens OR the static `MCP_WRITE_TOKEN`
