@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 import Image from "next/image";
 import { Briefcase, GraduationCap, Award, Heart } from "lucide-react";
 
@@ -173,6 +174,7 @@ const colorMap = {
 export default function CVPage() {
   return (
     <div className="page-transition py-16 px-4">
+      <BreadcrumbJsonLd name="CV" path="/cv" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">

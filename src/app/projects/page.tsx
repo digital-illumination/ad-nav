@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 import Image from "next/image";
 import { Bot, Globe, Briefcase, Code2 } from "lucide-react";
 import { ReactNode } from "react";
@@ -173,6 +174,7 @@ export default function ProjectsPage() {
 
   return (
     <div className="page-transition py-16 px-4">
+      <BreadcrumbJsonLd name="Projects" path="/projects" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">

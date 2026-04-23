@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 import Image from "next/image";
 import { Target, Users, Wrench, Sparkles } from "lucide-react";
 import { BASE_URL } from "@/lib/constants";
@@ -87,6 +88,7 @@ export default function AboutPage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(profilePageJsonLd) }}
       />
+      <BreadcrumbJsonLd name="About" path="/about" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getContextFiles } from "@/lib/content";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 
 export const metadata: Metadata = {
   title: "Context Portfolio",
@@ -15,6 +16,7 @@ export default function ContextPage() {
 
   return (
     <div className="page-transition py-16 px-4">
+      <BreadcrumbJsonLd name="Context Portfolio" path="/context" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">

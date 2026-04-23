@@ -4,6 +4,7 @@ import Image from "next/image";
 import { getBlogPosts } from "@/lib/content";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 
 export const metadata: Metadata = {
   title: "Blog",
@@ -17,6 +18,7 @@ export default function BlogPage() {
 
   return (
     <div className="page-transition py-16 px-4">
+      <BreadcrumbJsonLd name="Blog" path="/blog" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">

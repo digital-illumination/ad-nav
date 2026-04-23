@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
+import BreadcrumbJsonLd from "@/components/BreadcrumbJsonLd";
 import { Mail } from "lucide-react";
 import { ReactNode } from "react";
 
@@ -59,6 +60,7 @@ const contactLinks: { label: string; value: string; href: string; icon: ReactNod
 export default function ContactPage() {
   return (
     <div className="page-transition py-16 px-4">
+      <BreadcrumbJsonLd name="Contact" path="/contact" />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">
