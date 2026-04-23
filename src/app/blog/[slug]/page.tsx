@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getBlogPost, getBlogPosts } from "@/lib/content";
+import { BASE_URL } from "@/lib/constants";
 import NeonCard from "@/components/NeonCard";
 import Link from "next/link";
 import Image from "next/image";
@@ -49,21 +50,56 @@ export default async function BlogPostPage({ params }: Props) {
   const result = await remark().use(remarkHtml).process(post.content);
   const htmlContent = result.toString();
 
+  const postUrl = `${BASE_URL}/blog/${slug}`;
+  const imageUrl = post.image ? `${BASE_URL}${post.image}` : undefined;
+  const publishedIso = new Date(post.date).toISOString();
+
+  const blogPostingJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.title,
+    description: post.excerpt,
+    datePublished: publishedIso,
+    dateModified: publishedIso,
+    url: postUrl,
+    mainEntityOfPage: { "@type": "WebPage", "@id": postUrl },
+    author: {
+      "@type": "Person",
+      "@id": `${BASE_URL}/#adam`,
+      name: "Adam Stacey",
+      url: BASE_URL,
+    },
+    publisher: {
+      "@type": "Person",
+      "@id": `${BASE_URL}/#adam`,
+      name: "Adam Stacey",
+      url: BASE_URL,
+    },
+    ...(post.tags.length > 0 && { keywords: post.tags.join(", ") }),
+    ...(imageUrl && {
+      image: { "@type": "ImageObject", url: imageUrl },
+    }),
+  };
+
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: `${BASE_URL}/` },
+      { "@type": "ListItem", position: 2, name: "Blog", item: `${BASE_URL}/blog` },
+      { "@type": "ListItem", position: 3, name: post.title },
+    ],
+  };
+
   return (
     <div className="page-transition">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "Article",
-            headline: post.title,
-            datePublished: new Date(post.date).toISOString(),
-            author: { "@type": "Person", name: "Adam Stacey" },
-            description: post.excerpt,
-            ...(post.image && { image: post.image }),
-          }),
-        }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(blogPostingJsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
       />
       {/* Hero image — full width */}
       {post.image && (

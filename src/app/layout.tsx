@@ -72,23 +72,36 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               "@context": "https://schema.org",
-              "@type": "WebSite",
-              name: SITE_NAME,
-              url: BASE_URL,
-              author: {
-                "@type": "Person",
-                name: "Adam Stacey",
-                jobTitle: "Head of Technology",
-                worksFor: {
-                  "@type": "Organization",
-                  name: "Compare the Market",
+              "@graph": [
+                {
+                  "@type": "WebSite",
+                  "@id": `${BASE_URL}/#website`,
+                  url: BASE_URL,
+                  name: SITE_NAME,
+                  description: SITE_DESCRIPTION,
+                  publisher: { "@id": `${BASE_URL}/#adam` },
+                  inLanguage: "en-GB",
                 },
-                url: BASE_URL,
-                sameAs: [
-                  "https://www.linkedin.com/in/adamcstacey/",
-                  "https://github.com/digital-illumination",
-                ],
-              },
+                {
+                  "@type": "Person",
+                  "@id": `${BASE_URL}/#adam`,
+                  name: "Adam Stacey",
+                  jobTitle: "Head of Technology",
+                  description:
+                    "Head of Technology at Compare the Market. AI apprentice, digital transformation leader, and agent-first builder.",
+                  image: `${BASE_URL}/images/adam-headshot.jpg`,
+                  url: BASE_URL,
+                  worksFor: {
+                    "@type": "Organization",
+                    name: "Compare the Market",
+                    url: "https://www.comparethemarket.com",
+                  },
+                  sameAs: [
+                    "https://www.linkedin.com/in/adamcstacey/",
+                    "https://github.com/digital-illumination",
+                  ],
+                },
+              ],
             }),
           }}
         />
