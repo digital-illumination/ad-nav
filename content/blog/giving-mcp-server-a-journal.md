@@ -3,7 +3,7 @@ title: "Giving My MCP Server a Journal"
 date: "2026-04-19"
 excerpt: "Last week's personal MCP server was read-only. That wasn't a feature. Making it writable, without letting agents trample the content, turned into the most interesting week of architecture since I first shipped it."
 tags: ["MCP", "AI Agents", "OAuth", "Claude Desktop", "Architecture"]
-image: "/images/blog/mcp-server.jpg"
+image: "/images/blog/mcp-journal.jpg"
 ---
 
 ## Where I Left Off
