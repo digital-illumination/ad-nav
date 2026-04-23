@@ -30,6 +30,15 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 | `/api/context` | GET | All context files. Supports `?files=identity,domain-knowledge` filter |
 | `/api/context/[file]` | GET | Single context file as raw markdown (`Content-Type: text/markdown`) |
 | `/api/mcp` | GET/POST/DELETE | Remote MCP endpoint (Streamable HTTP transport). Same tools and resources as the stdio server |
+| `/api/oauth/signin` | GET | Kick off GitHub OAuth flow for identity. Accepts optional `return_to` |
+| `/api/oauth/callback/github` | GET | GitHub OAuth callback: verifies state, checks allowlist, creates session |
+| `/api/oauth/me` | GET | Current session info, or 401 if not signed in |
+| `/api/oauth/signout` | GET/POST | Destroy session |
+| `/api/oauth/register` | POST | Dynamic client registration (RFC 7591) |
+| `/api/oauth/authorize` | GET/POST | Authorization endpoint with inline consent page |
+| `/api/oauth/token` | POST | Token endpoint (authorization_code + refresh_token grants, PKCE required) |
+| `/.well-known/oauth-authorization-server` | GET | OAuth 2.0 authorization server metadata (RFC 8414), via rewrite |
+| `/.well-known/oauth-protected-resource` | GET | OAuth 2.0 protected resource metadata (RFC 9728), via rewrite |
 | `/.well-known/ai-context.json` | GET | Agent discovery file pointing to API routes |
 | `/sitemap.xml` | GET | Auto-generated sitemap (static pages + blog posts) |
 | `/robots.txt` | GET | Crawler directives (allow all, disallow `/api/`) |
@@ -45,13 +54,14 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 - **Loader:** `src/lib/content.ts` reads markdown, parses with gray-matter, calculates reading time
 - **Renderer:** remark + remark-html, styled via `.prose-cyberpunk` CSS class in globals.css
 
-### Blog Posts (5)
+### Blog Posts (6)
 
-1. `building-mcp-server-personal-context.md` (2026-04-13) -- Building a personal MCP server build log
-2. `landing-ai-transformation.md` (2026-04-12) -- AI transformation leadership
-3. `building-this-site-with-agents.md` (2026-04-05) -- Meta site rebuild story
-4. `delivery-without-visibility.md` (2026-03-20) -- Stakeholder visibility failure story
-5. `salesforce-price-book-2025.md` (2024-12-28) -- Salesforce CPQ price book update
+1. `giving-mcp-server-a-journal.md` (2026-04-19) -- Making the MCP server writable via a journal tier, plus OAuth 2.1 so any client can authenticate
+2. `building-mcp-server-personal-context.md` (2026-04-13) -- Building a personal MCP server build log
+3. `landing-ai-transformation.md` (2026-04-12) -- AI transformation leadership
+4. `building-this-site-with-agents.md` (2026-04-05) -- Meta site rebuild story
+5. `delivery-without-visibility.md` (2026-03-20) -- Stakeholder visibility failure story
+6. `salesforce-price-book-2025.md` (2024-12-28) -- Salesforce CPQ price book update
 
 ### Context Portfolio (10 files)
 
@@ -182,15 +192,70 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 - **Methods:** `POST` (JSON-RPC requests), `GET` (SSE, unused in stateless mode), `DELETE` (no-op)
 - **Implementation:** `src/app/api/mcp/route.ts` using `WebStandardStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk`
 - **Server factory:** `src/lib/mcp-server.ts` — shared tool/resource definitions, uses `getContextFiles()` from `src/lib/content.ts`
-- **Auth:**
-  - `MCP_BEARER_TOKEN` (optional): if set, every request must carry `Authorization: Bearer <token>`. Unset = reads public.
-  - `MCP_WRITE_TOKEN` (optional): gates the `append_to_context` tool only. The tool compares the presented bearer against this value. Unset = write tool is disabled. If both tokens are set and differ, the write token must be used (it has to pass the transport check first).
-- **GitHub write config (only for `append_to_context`):**
-  - `GITHUB_TOKEN`: PAT or GitHub App installation token with `contents:write` on the target repo.
-  - `GITHUB_REPO`: `owner/repo`, e.g. `digital-illumination/ad-nav`.
-  - `GITHUB_BRANCH` (optional): defaults to `main`.
-- **Statelessness:** Each request creates a fresh `McpServer` + transport. No session storage, no sticky routing — safe to scale to zero.
+- **Statelessness:** Each request creates a fresh `McpServer` + transport. No session storage, no sticky routing, safe to scale to zero.
 - **Runtime:** Node.js (not Edge — the SDK uses Node APIs internally)
+
+##### Auth model (two orthogonal gates)
+
+**Transport gate (optional lockdown).** If `MCP_BEARER_TOKEN` is set, every request must present that bearer. In that mode, reads are locked down too. Leave this env var unset for the common case: public reads, authenticated writes.
+
+**Resource gate (per-tool).** When the transport gate is off, each request is resolved into an `AuthContext` in `src/app/api/mcp/route.ts` and handed to the server factory. Resolution order:
+
+1. No `Authorization` header → anonymous, empty scopes. Read tools still work.
+2. Bearer matches `MCP_WRITE_TOKEN` → admin, all scopes, bypasses scope checks. Used by Claude Code via its static config.
+3. Bearer is a valid JWT (HS256, issuer + audience matching) → subject and scopes from the token.
+4. Any other bearer → 401 with `WWW-Authenticate: Bearer realm="mcp", error="invalid_token", error_description="..."` per RFC 6750.
+
+`append_to_journal` requires `isAdmin` OR the `context:write` scope. All other tools are public.
+
+##### OAuth 2.1 authorization server
+
+The site acts as its own authorization server, with GitHub as the upstream identity provider. Compliant MCP clients (Claude Desktop, claude.ai, Cowork, etc.) discover and use it automatically via RFC 8414 / 9728 metadata.
+
+**Discovery:**
+- `/.well-known/oauth-authorization-server` (RFC 8414) — advertises authorize, token, registration endpoints; `S256` PKCE; supported scopes
+- `/.well-known/oauth-protected-resource` (RFC 9728) — points MCP clients at the authorization server
+
+Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
+
+**Registration, authorize, token:**
+- `/api/oauth/register` — dynamic client registration (RFC 7591). Public clients with PKCE are the default; no client secret needed. Enforces https redirect_uris except for localhost loopback.
+- `/api/oauth/authorize` — GET renders a consent page in the site aesthetic. POST processes Approve/Deny. PKCE required (`S256`). Redirects to `/api/oauth/signin?return_to=...` if the user has no session.
+- `/api/oauth/token` — `authorization_code` and `refresh_token` grants. Refresh tokens rotate on each use (replayed refresh tokens get `invalid_grant`).
+
+**Identity and session:**
+- `/api/oauth/signin` — kicks off GitHub OAuth with a state cookie for CSRF
+- `/api/oauth/callback/github` — verifies state, exchanges the code, checks the GitHub login against `OAUTH_ALLOWLIST`, creates a Firestore-backed browser session
+- `/api/oauth/me` — returns the current session (for verification)
+- `/api/oauth/signout` — destroys session
+
+**Scopes:**
+- `context:read` — currently all read tools are public, so this is reserved for future gating
+- `context:write` — required for `append_to_journal`
+
+**Tokens:**
+- Access tokens are signed JWTs (HS256, `iss=https://ad-nav.co.uk`, `aud=https://ad-nav.co.uk/api/mcp`, 1 hour TTL). Stateless, no Firestore round-trip on MCP requests.
+- Refresh tokens are opaque 48-byte hex strings, 30-day TTL, rotated on use.
+
+**Firestore collections:**
+- `sessions` — browser sessions (cookie-keyed)
+- `oauth_clients` — dynamically registered clients
+- `oauth_codes` — short-lived authorization codes (5-minute TTL, single-use, transactional consume)
+- `oauth_refresh_tokens` — refresh tokens with rotation semantics
+
+##### Env vars
+
+**Always needed (reads public, writes via static admin):**
+- `MCP_WRITE_TOKEN` — static admin bearer. Used by Claude Code. Optional, but without it `append_to_journal` is only accessible via OAuth.
+- `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BRANCH` (optional, default `main`) — for committing journal entries via the GitHub Contents API.
+
+**OAuth-specific:**
+- `OAUTH_JWT_SECRET` — HMAC secret for signing access tokens.
+- `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` — for the upstream GitHub identity flow.
+- `OAUTH_ALLOWLIST` — comma-separated GitHub logins permitted to authenticate. Empty or unset = nobody. Fail-closed.
+
+**Lockdown mode:**
+- `MCP_BEARER_TOKEN` (optional) — when set, transport-level auth is enabled, and reads stop being public. Not used in normal operation.
 
 ## Planned Work
 
@@ -200,50 +265,25 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 
 ### MCP Server (done)
 - Local stdio server in `mcp/` with read tools + resources
-- Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless, optional bearer auth): usable as a custom connector in claude.ai, Cowork, Claude Desktop
+- Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless): usable as a custom connector in claude.ai, Cowork, Claude Desktop
 - Three-tier storage model: live session (ephemeral) → journal (agent-writable append-only log) → canonical context (human-edited)
-- `append_to_journal` write tool on the remote endpoint: appends structured session entries to `content/journal/YYYY-MM.md` via the GitHub Contents API, gated on `MCP_WRITE_TOKEN`. Creates monthly files on first write.
+- `append_to_journal` write tool: appends structured session entries to `content/journal/YYYY-MM.md` via the GitHub Contents API. Creates monthly files on first write.
 - `session_logging_guide` tool: serves the current rules for when and how to log
 - `log-session` prompt: user-triggered slash-command template for manual session logging
 - Server-level MCP `instructions` field: every client is told the tier model on connect
 - `propose_context_update` curation tool: ranks candidate files and surfaces relevant paragraphs. Read-only, designed for a future curator pass.
 
-### OAuth 2.1 for remote MCP (in progress)
+### OAuth 2.1 for remote MCP (done)
 
-Background: Claude Desktop and other MCP clients expect OAuth 2.1 for remote authenticated connectors. The static `MCP_WRITE_TOKEN` covers Claude Code today, but does not satisfy Claude Desktop's connector UI. Adding OAuth alongside (not replacing) the static token lets any compliant client authenticate.
+Claude Desktop and other modern MCP clients expect OAuth 2.1 for remote authenticated connectors. The full spec is now implemented alongside the static `MCP_WRITE_TOKEN` path, so both Claude Code (static bearer) and Claude Desktop (OAuth connector) authenticate cleanly.
 
-Delivery is split into four chunks. This section tracks progress.
+Built in three reviewable commits, each covering one layer:
 
-**Chunk 1 — Identity foundation (done).** GitHub OAuth as upstream identity provider. Env-var allowlist. Firestore-backed browser sessions.
-- `src/lib/firestore.ts` — singleton client, ADC on Cloud Run
-- `src/lib/session.ts` — Firestore-backed sessions keyed on an httpOnly cookie
-- `src/lib/github-oauth.ts` — upstream OAuth helpers (authorize URL, code exchange, user fetch)
-- `src/lib/allowlist.ts` — `OAUTH_ALLOWLIST` env var, comma-separated GitHub logins, fail-closed
-- `/api/oauth/signin` — kicks off GitHub flow, stores state cookie for CSRF
-- `/api/oauth/callback/github` — verifies state, exchanges code, checks allowlist, creates session
-- `/api/oauth/me` — returns current session (for verification)
-- `/api/oauth/signout` — destroys session
-- Firestore collections: `sessions`
+- **Identity foundation** — GitHub OAuth as upstream identity provider, env-var allowlist (fail-closed), Firestore-backed browser sessions. Routes: `/api/oauth/signin`, `/api/oauth/callback/github`, `/api/oauth/me`, `/api/oauth/signout`. Modules: `src/lib/firestore.ts`, `src/lib/session.ts`, `src/lib/github-oauth.ts`, `src/lib/allowlist.ts`.
+- **OAuth 2.1 authorization server** — discovery metadata (RFC 8414, RFC 9728) via Next.js rewrites; dynamic client registration (RFC 7591); authorize endpoint with inline cyberpunk-themed consent page; token endpoint with PKCE (`S256` required) and refresh rotation. Modules: `src/lib/oauth.ts`, `src/lib/oauth-storage.ts`. Firestore collections: `oauth_clients`, `oauth_codes` (transactional consume), `oauth_refresh_tokens` (rotation on use).
+- **Resource server gating** — `/api/mcp` resolves the presented bearer into an `AuthContext` (admin via static token, JWT holder via OAuth, or anonymous). Invalid bearers get 401 with RFC 6750 `WWW-Authenticate`. `append_to_journal` requires `isAdmin` OR the `context:write` scope. Read tools remain public.
 
-**Chunk 2 — OAuth 2.1 server endpoints (done).**
-- `/.well-known/oauth-authorization-server` (RFC 8414) and `/.well-known/oauth-protected-resource` (RFC 9728) metadata, served via Next.js rewrites to `/api/oauth/metadata/...`
-- `/api/oauth/register` — dynamic client registration (RFC 7591). Defaults to public client + PKCE (no client secret).
-- `/api/oauth/authorize` — GET renders a consent page in the site aesthetic, POST processes approve/deny. Validates client_id, redirect_uri, PKCE challenge, scopes. Redirects to `/api/oauth/signin?return_to=...` when no session.
-- `/api/oauth/token` — `authorization_code` and `refresh_token` grants. Refresh tokens rotate on use.
-- `src/lib/oauth.ts` — JWT (HS256) signing/verification, PKCE verifier, scope constants (`context:read`, `context:write`), opaque token generator, HTML escape
-- `src/lib/oauth-storage.ts` — Firestore ops for `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens`; atomic code consumption via transaction
-- Firestore collections: `oauth_clients`, `oauth_codes`, `oauth_refresh_tokens` (all added in chunk 2)
-- Env vars used: `OAUTH_JWT_SECRET` (secret), existing `OAUTH_ALLOWLIST` / GitHub creds from chunk 1
-
-**Chunk 3 — Resource server gating (done).**
-- `/api/mcp` now resolves the presented bearer into an `AuthContext`: admin (matches `MCP_WRITE_TOKEN`), JWT holder (verified against `OAUTH_JWT_SECRET` with issuer/audience checks), or anonymous
-- Presented-but-invalid bearers get a 401 with RFC 6750 `WWW-Authenticate` header including `error_description`
-- `createContextMcpServer({ auth })` receives the resolved context; exported `AuthContext` and `ANONYMOUS_AUTH` types
-- `append_to_journal` requires `isAdmin` OR the `context:write` scope; the inline `MCP_WRITE_TOKEN` check moved upstream to the route handler
-- Reads (list/search/get/propose/session_logging_guide) remain public
-- Backward compatibility: Claude Code keeps working with the static `MCP_WRITE_TOKEN` bearer exactly as before
-
-**Chunk 4 — End-to-end verification + SPEC rewrite (planned).**
+Verified end-to-end via manual curl (anonymous reads, static-bearer writes, full OAuth authorize + token + write, refresh rotation, replay rejection) and from Claude Desktop's custom connector UI.
 
 ### Context Curation (planned)
 - Scheduled curator agent: reads accumulated journal entries, calls `propose_context_update`, drafts changes to a branch, opens a PR against canonical files. Human approval always in the loop. Deferred until the journal has a month or two of material.
