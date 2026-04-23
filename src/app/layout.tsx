@@ -3,7 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import ParticleBackground from "@/components/ParticleBackground";
+import ParticleBackgroundLazy from "@/components/ParticleBackgroundLazy";
 import { BASE_URL, SITE_NAME, SITE_DESCRIPTION } from "@/lib/constants";
 
 const inter = Inter({
@@ -105,7 +105,7 @@ export default function RootLayout({
             }),
           }}
         />
-        <ParticleBackground />
+        <ParticleBackgroundLazy />
         <Navbar />
         <main className="flex-1 relative z-10 pt-16">{children}</main>
         <Footer />

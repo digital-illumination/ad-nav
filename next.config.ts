@@ -16,6 +16,13 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  experimental: {
+    // Inline the (small) Tailwind CSS bundle into the <head> instead of
+    // loading it via a render-blocking <link>. Site is atomic-CSS and most
+    // visitors are first-timers, so the caching trade-off is worth the LCP
+    // win. See: next/docs/.../inlineCss.md
+    inlineCss: true,
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
