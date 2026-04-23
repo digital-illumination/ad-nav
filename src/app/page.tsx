@@ -60,8 +60,9 @@ export default function Home() {
             <Image
               src="/images/adam-headshot.jpg"
               alt="Adam Stacey"
-              width={320}
-              height={320}
+              width={160}
+              height={160}
+              sizes="(max-width: 640px) 128px, 160px"
               className="object-cover w-full h-full brightness-90 saturate-[0.85]"
               priority
             />
@@ -73,7 +74,7 @@ export default function Home() {
             className="text-6xl sm:text-8xl font-mono font-bold neon-text-purple hero-text-pulse mb-6"
           />
 
-          <h2 className="text-xl sm:text-2xl font-mono text-text-secondary mb-8">
+          <h2 className="text-xl sm:text-2xl font-mono text-text-secondary mb-8 min-h-[3.5rem] sm:min-h-[2rem]">
             <TypingText
               phrases={[
                 "Head of Technology @ Compare the Market",

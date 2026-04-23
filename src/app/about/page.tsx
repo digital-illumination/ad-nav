@@ -3,12 +3,49 @@ import NeonCard from "@/components/NeonCard";
 import GlitchText from "@/components/GlitchText";
 import Image from "next/image";
 import { Target, Users, Wrench, Sparkles } from "lucide-react";
+import { BASE_URL } from "@/lib/constants";
 
 export const metadata: Metadata = {
   title: "About",
   description:
     "Learn about Adam Stacey — Head of Technology at Compare the Market, AI transformation leader, and agent-first builder.",
   alternates: { canonical: "/about" },
+};
+
+const profilePageJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "ProfilePage",
+  dateCreated: "2026-04-01",
+  dateModified: new Date().toISOString().split("T")[0],
+  mainEntity: {
+    "@type": "Person",
+    "@id": `${BASE_URL}/#adam`,
+    name: "Adam Stacey",
+    alternateName: "Adam",
+    description:
+      "Head of Technology at Compare the Market. AI transformation leader, agent-first builder, and digital strategist with over 20 years in technology.",
+    image: `${BASE_URL}/images/adam-headshot.jpg`,
+    jobTitle: "Head of Technology",
+    worksFor: {
+      "@type": "Organization",
+      name: "Compare the Market",
+      url: "https://www.comparethemarket.com",
+    },
+    url: `${BASE_URL}/about`,
+    sameAs: [
+      "https://www.linkedin.com/in/adamcstacey/",
+      "https://github.com/digital-illumination",
+    ],
+    knowsAbout: [
+      "AI Agents",
+      "Model Context Protocol",
+      "Digital Transformation",
+      "Engineering Leadership",
+      "Cloud Architecture",
+      "Salesforce CPQ",
+      "Agent-First Development",
+    ],
+  },
 };
 
 const competencies = [
@@ -46,6 +83,10 @@ const timeline = [
 export default function AboutPage() {
   return (
     <div className="page-transition py-16 px-4">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(profilePageJsonLd) }}
+      />
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-16">
@@ -72,8 +113,9 @@ export default function AboutPage() {
               <Image
                 src="/images/adam-headshot.jpg"
                 alt="Adam Stacey"
-                width={288}
-                height={288}
+                width={144}
+                height={144}
+                sizes="(max-width: 640px) 112px, 144px"
                 className="object-cover w-full h-full brightness-90 saturate-[0.85]"
               />
             </div>
