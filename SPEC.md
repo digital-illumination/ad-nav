@@ -50,7 +50,8 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 
 - **Blog posts:** `content/blog/*.md` with YAML frontmatter (`title`, `date`, `excerpt`, `tags`, `image`)
 - **Context files (canonical):** `content/context/*.md` with YAML frontmatter (`title`, `description`). Human-edited. Never written directly by agents.
-- **Journal (working memory):** `content/journal/YYYY-MM.md`, one file per calendar month. Agent-writable append-only log of session observations via the `append_to_journal` MCP tool. Not part of any canonical profile. Used as source material for future curation passes.
+- **Journal (working memory):** `journal/YYYY-MM.md` in the private [`adam-corpus`](https://github.com/digital-illumination/adam-corpus) repo, one file per UTC calendar month. Agent-writable append-only log of session observations via the `append_to_journal` MCP tool. Private (used to live in `ad-nav/content/journal/` but was moved out of the public repo because the level of detail agents wrote made it inappropriate for public storage). Read back via `get_journal_entries`. Not part of any canonical profile. Source material for future curation passes that promote durable signal to canonical via human-reviewed PR.
+- **Archive (raw substrate):** also in `adam-corpus`. Conversation transcripts, voice memos, decision logs, meeting notes, blog drafts, correspondence. Not exposed by the MCP server. Mentioned here because the journal sits alongside it as part of the four-tier model.
 - **Loader:** `src/lib/content.ts` reads markdown, parses with gray-matter, calculates reading time
 - **Renderer:** remark + remark-html, styled via `.prose-cyberpunk` CSS class in globals.css
 
@@ -161,14 +162,15 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 **Journal write tool (remote only, authenticated):**
 | Tool | Description |
 |------|-------------|
-| `append_to_journal` | Append a structured session entry to `content/journal/YYYY-MM.md` for the current UTC month. Creates the month file if it doesn't exist. Commits via the GitHub Contents API. Requires bearer matching `MCP_WRITE_TOKEN`. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent` (all optional). Does NOT write to canonical files. |
+| `append_to_journal` | Append a structured session entry to the private journal at `journal/YYYY-MM.md` in `adam-corpus`. Creates the month file if it doesn't exist. Commits via the GitHub Contents API. Requires `isAdmin` (matches `MCP_WRITE_TOKEN`) or OAuth JWT with `context:write` scope. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent` (all optional). Does NOT write to canonical files. |
+| `get_journal_entries` | Fetch the journal entries for a given month (defaults to current UTC month) from `adam-corpus`. Same auth as `append_to_journal`. Returns raw markdown. Used by a curator pass or by an agent reviewing prior observations before writing a new entry. |
 
 **Prompts (remote only, user-triggered):**
 | Prompt | Description |
 |--------|-------------|
 | `log-session` | Slash-command template that instructs the agent to summarise the current session and call `append_to_journal`. Surfaces as `/log-session` in clients like Claude Desktop. |
 
-**Server-level instructions.** The remote server sets the MCP `instructions` field on connect, advising every client of the three-tier model (session / journal / canonical) and pointing at `session_logging_guide` for details. No client-side config needed.
+**Server-level instructions.** The remote server sets the MCP `instructions` field on connect, advising every client of the four-tier model (archive / session / journal / canonical) and pointing at `session_logging_guide` for details. No client-side config needed.
 
 #### Local stdio server (`mcp/`)
 
@@ -247,7 +249,10 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 
 **Always needed (reads public, writes via static admin):**
 - `MCP_WRITE_TOKEN` — static admin bearer. Used by Claude Code. Optional, but without it `append_to_journal` is only accessible via OAuth.
-- `GITHUB_TOKEN`, `GITHUB_REPO`, `GITHUB_BRANCH` (optional, default `main`) — for committing journal entries via the GitHub Contents API.
+- `GITHUB_TOKEN` — PAT or GitHub App installation token. Must have `contents:write` on the journal repo (i.e. `adam-corpus`).
+- `JOURNAL_REPO` — `owner/repo` for the private journal target, e.g. `digital-illumination/adam-corpus`. Required for `append_to_journal` and `get_journal_entries` to function.
+- `JOURNAL_BRANCH` (optional, default `main`) — branch to commit to inside the journal repo.
+- `GITHUB_REPO`, `GITHUB_BRANCH` — kept around for backward compatibility, but no longer used by the journal tools.
 
 **OAuth-specific:**
 - `OAUTH_JWT_SECRET` — HMAC secret for signing access tokens.
@@ -267,7 +272,8 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - Local stdio server in `mcp/` with read tools + resources
 - Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless): usable as a custom connector in claude.ai, Cowork, Claude Desktop
 - Three-tier storage model: live session (ephemeral) → journal (agent-writable append-only log) → canonical context (human-edited)
-- `append_to_journal` write tool: appends structured session entries to `content/journal/YYYY-MM.md` via the GitHub Contents API. Creates monthly files on first write.
+- `append_to_journal` write tool: appends structured session entries to the private journal in `adam-corpus` via the GitHub Contents API. Creates monthly files on first write.
+- `get_journal_entries` read tool (auth-gated): returns the raw monthly journal markdown for the requesting agent (or curator) to review.
 - `session_logging_guide` tool: serves the current rules for when and how to log
 - `log-session` prompt: user-triggered slash-command template for manual session logging
 - Server-level MCP `instructions` field: every client is told the tier model on connect

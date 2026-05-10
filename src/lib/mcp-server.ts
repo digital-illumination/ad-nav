@@ -28,16 +28,19 @@ export interface McpServerOptions {
   auth?: AuthContext;
 }
 
-const SERVER_INSTRUCTIONS = `This server hosts Adam Stacey's personal context portfolio. It follows a three-tier storage model. You must understand the tiers before using any write tool.
+const SERVER_INSTRUCTIONS = `This server hosts Adam Stacey's personal context portfolio. It follows a four-tier storage model. You must understand the tiers before using any write tool.
+
+TIER 0 — ARCHIVE (private, you do not write here)
+  Raw substrate (conversation transcripts, voice memos, decision drafts, meeting notes) in a private repo. Not exposed by this server. Mentioned for completeness so you know where the raw material lives.
 
 TIER 1 — SESSION (not your concern)
   The live conversation with Adam. Ephemeral. Nothing here.
 
-TIER 2 — JOURNAL (agent-writable, append-only)
-  Files under content/journal/*.md. A rolling log of session observations written via the \`append_to_journal\` tool. Cheap signal capture. One entry per meaningful session. You may write here.
+TIER 2 — JOURNAL (agent-writable, append-only, PRIVATE)
+  Distilled session signal. Written via the \`append_to_journal\` tool. Stored in a private repo, NOT public. You can be candid here: verbatim quotes, internal tool names, honest pattern observations. Privacy rules around third parties (no real names for CtM colleagues, no Digital Illumination client names, no NDA material) still apply. Use \`get_journal_entries\` to read prior months if you need context.
 
 TIER 3 — CANONICAL CONTEXT (human-edited, do not write)
-  Files under content/context/*.md. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them.
+  Files under content/context/*.md in the public ad-nav repo. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them.
 
 WHEN TO LOG A SESSION
   At a natural close, or when a meaningful point is reached (a decision made, a preference revealed, a problem solved, follow-ups generated). If the session was trivial, do not log. If in doubt, ask Adam or call \`session_logging_guide\`. Never log without offering first, unless Adam has explicitly said "log this".
@@ -47,12 +50,12 @@ TOOLS
     - list_context_files, search_context, get_full_context: browse the canonical portfolio
     - propose_context_update: analyse a summary against existing files before any write
     - session_logging_guide: rules for when and what to log to the journal
-  Writes (require MCP_WRITE_TOKEN):
-    - append_to_journal: append a structured session entry to content/journal/YYYY-MM.md
+  Reads (require auth):
+    - get_journal_entries: fetch a month of journal entries (private)
+  Writes (require auth):
+    - append_to_journal: append a structured session entry to the private journal
   Prompts (user-triggered):
-    - log-session: slash-command template that instructs you to summarise and log the current session
-
-Privacy rules in the canonical context files (no real names for CtM colleagues, no Digital Illumination client names, etc.) apply equally to journal entries. The journal is public once committed.`;
+    - log-session: slash-command template that instructs you to summarise and log the current session`;
 
 /**
  * Build a configured `McpServer` instance exposing Adam's context portfolio.
@@ -280,15 +283,36 @@ export function createContextMcpServer(options: McpServerOptions = {}): McpServe
     }
   );
 
+  // --- Auth-gated journal reads ---
+
+  server.tool(
+    "get_journal_entries",
+    `Fetch the journal entries for a given month (or the current UTC month if none given). The journal is private, so this tool requires the same auth as append_to_journal: admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.
+
+Use this to read your own prior journal observations before composing a new entry, or as a curator pass to look for patterns across multiple sessions in a month. Returns the raw markdown of the month file.`,
+    {
+      month: z
+        .string()
+        .regex(/^\d{4}-\d{2}$/, "Must be YYYY-MM")
+        .optional()
+        .describe("UTC month to fetch, e.g. '2026-05'. Defaults to the current UTC month."),
+    },
+    async ({ month }) => {
+      return getJournalEntries({ auth, month });
+    }
+  );
+
   // --- Write tool (journal tier) ---
 
   server.tool(
     "append_to_journal",
-    `Append a structured session entry to Adam's journal (content/journal/YYYY-MM.md). Writes via the GitHub Contents API. Requires a bearer token matching MCP_WRITE_TOKEN.
+    `Append a structured session entry to Adam's PRIVATE journal. The journal lives in a private repo, separate from the public ad-nav site. Writes via the GitHub Contents API. Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.
 
 WHEN TO USE: at a natural close of a session when something non-trivial happened (a decision, a revealed preference, a problem explored, follow-ups generated). Offer first, do not log silently unless Adam asked.
 
 WHEN NOT TO USE: trivial sessions, mid-task, or to capture granular activity. The journal is about distillable signal, not a task log. If unsure, call session_logging_guide first.
+
+Because the journal is private, you can be candid: verbatim quotes, internal tool names, honest pattern observations. Third-party privacy (CtM colleagues, DI clients, NDA material) still applies.
 
 This does NOT write to canonical context files. Those are human-edited.`,
     {
@@ -397,7 +421,7 @@ Log this session to the journal if ANY of these are true:
 
 ## Where to log
 
-Call \`append_to_journal\`. The server routes to content/journal/YYYY-MM.md for the current month. You do not pick the path.
+Call \`append_to_journal\`. The server routes to the current month's journal file in Adam's private corpus. You do not pick the path. The journal is private, not public.
 
 ## Fields
 
@@ -503,20 +527,20 @@ async function appendToJournal(args: AppendJournalArgs) {
     );
   }
 
-  const repo = process.env.GITHUB_REPO;
+  const repo = process.env.JOURNAL_REPO;
   const githubToken = process.env.GITHUB_TOKEN;
-  const branch = process.env.GITHUB_BRANCH || "main";
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
 
   if (!repo || !githubToken) {
     return toolError(
-      "GitHub is not configured: set GITHUB_REPO (owner/repo) and GITHUB_TOKEN."
+      "Journal storage is not configured: set JOURNAL_REPO (owner/repo) and GITHUB_TOKEN. The journal lives in a private repo, separate from the public ad-nav site."
     );
   }
 
   const now = new Date();
   const monthSlug = currentMonthSlug(now);
   const monthTitle = currentMonthTitle(now);
-  const filePath = `content/journal/${monthSlug}.md`;
+  const filePath = `journal/${monthSlug}.md`;
   const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
 
   const ghHeaders: Record<string, string> = {
@@ -578,6 +602,73 @@ async function appendToJournal(args: AppendJournalArgs) {
         text: `Logged session to ${filePath} on ${branch}.
 Commit: ${putJson.commit.sha}
 ${putJson.commit.html_url}`,
+      },
+    ],
+  };
+}
+
+// --- get_journal_entries implementation ---
+
+interface GetJournalArgs {
+  auth: AuthContext;
+  month?: string;
+}
+
+async function getJournalEntries({ auth, month }: GetJournalArgs) {
+  if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: get_journal_entries requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  const repo = process.env.JOURNAL_REPO;
+  const githubToken = process.env.GITHUB_TOKEN;
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
+
+  if (!repo || !githubToken) {
+    return toolError(
+      "Journal storage is not configured: set JOURNAL_REPO (owner/repo) and GITHUB_TOKEN."
+    );
+  }
+
+  const monthSlug = month ?? currentMonthSlug(new Date());
+  const filePath = `journal/${monthSlug}.md`;
+  const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+  const res = await fetch(`${apiBase}?ref=${encodeURIComponent(branch)}`, {
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "ad-nav-mcp",
+    },
+  });
+
+  if (res.status === 404) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `No journal entries for ${monthSlug} yet. The file ${filePath} does not exist on ${branch}.`,
+        },
+      ],
+    };
+  }
+  if (!res.ok) {
+    return toolError(`GitHub GET failed (${res.status}): ${await res.text()}`);
+  }
+
+  const fileJson = (await res.json()) as { content: string; encoding: string };
+  if (fileJson.encoding !== "base64") {
+    return toolError(`Unexpected GitHub encoding: ${fileJson.encoding}`);
+  }
+  const content = Buffer.from(fileJson.content, "base64").toString("utf-8");
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: content,
       },
     ],
   };
