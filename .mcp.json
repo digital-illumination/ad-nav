@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "adam-stacey-context": {
-      "command": "node",
-      "args": ["${PROJECT_ROOT}/mcp/build/index.js"]
-    }
-  }
-}

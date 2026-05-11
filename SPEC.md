@@ -181,9 +181,9 @@ For desktop clients that launch a child process.
 - **Transport:** stdio
 - **Content source:** `content/context/*.md` from repo root (override via `CONTEXT_DIR`)
 - **Build:** `cd mcp && npm install && npm run build`
-- **Configuration:**
-  - Claude Code: `.mcp.json` in project root (project-scoped, auto-loaded)
-  - Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Configuration:** opt-in. The project no longer ships an `.mcp.json` (which previously auto-loaded the stdio server via `${PROJECT_ROOT}/mcp/build/index.js`). The remote HTTP endpoint at `/api/mcp` is now the default everyday path. To use the stdio server locally (e.g. for offline reads), add it manually:
+  - Claude Code: `claude mcp add --scope user adam-stacey-context-stdio /absolute/path/to/mcp/build/index.js`
+  - Claude Desktop: edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 #### Remote HTTP endpoint (`/api/mcp`)
 
