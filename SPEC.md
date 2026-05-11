@@ -55,14 +55,15 @@ Dual-purpose personal site: human-readable portfolio and blog for visitors, mach
 - **Loader:** `src/lib/content.ts` reads markdown, parses with gray-matter, calculates reading time
 - **Renderer:** remark + remark-html, styled via `.prose-cyberpunk` CSS class in globals.css
 
-### Blog Posts (6)
+### Blog Posts (7)
 
-1. `giving-mcp-server-a-journal.md` (2026-04-19) -- Making the MCP server writable via a journal tier, plus OAuth 2.1 so any client can authenticate
-2. `building-mcp-server-personal-context.md` (2026-04-13) -- Building a personal MCP server build log
-3. `landing-ai-transformation.md` (2026-04-12) -- AI transformation leadership
-4. `building-this-site-with-agents.md` (2026-04-05) -- Meta site rebuild story
-5. `delivery-without-visibility.md` (2026-03-20) -- Stakeholder visibility failure story
-6. `salesforce-price-book-2025.md` (2024-12-28) -- Salesforce CPQ price book update
+1. `agents-over-trained-model.md` (2026-05-11) -- The strategic case for RAG-fed agents over fine-tuning, given a thin and fast-moving corpus
+2. `giving-mcp-server-a-journal.md` (2026-04-19) -- Making the MCP server writable via a journal tier, plus OAuth 2.1 so any client can authenticate
+3. `building-mcp-server-personal-context.md` (2026-04-13) -- Building a personal MCP server build log
+4. `landing-ai-transformation.md` (2026-04-12) -- AI transformation leadership
+5. `building-this-site-with-agents.md` (2026-04-05) -- Meta site rebuild story
+6. `delivery-without-visibility.md` (2026-03-20) -- Stakeholder visibility failure story
+7. `salesforce-price-book-2025.md` (2024-12-28) -- Salesforce CPQ price book update
 
 ### Context Portfolio (10 files)
 
@@ -299,7 +300,6 @@ Verified end-to-end via manual curl (anonymous reads, static-bearer writes, full
 ### Blog Pipeline
 Remaining post ideas from interview prep material:
 - "How I coordinated 300 engineers for a zero-downtime release"
-- "Why I chose agents over a trained model"
 - "Two engineers, two approaches"
 - "The hardest right decision"
 - "The time I confused advocacy with leadership"
