@@ -289,7 +289,7 @@ export function createContextMcpServer(options: McpServerOptions = {}): McpServe
     "get_journal_entries",
     `Fetch the journal entries for a given month (or the current UTC month if none given). The journal is private, so this tool requires the same auth as append_to_journal: admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.
 
-Use this to read your own prior journal observations before composing a new entry, or as a curator pass to look for patterns across multiple sessions in a month. Returns the raw markdown of the month file.`,
+Use this to read your own prior journal observations before composing a new entry, or as a curator pass to look for patterns across multiple sessions in a month. Returns the concatenated markdown of every per-entry file in journal/YYYY/MM/, sorted by timestamp.`,
     {
       month: z
         .string()
@@ -455,31 +455,70 @@ interface AppendJournalArgs {
   agent?: string;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
 function currentMonthSlug(now: Date = new Date()): string {
+  return `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}`;
+}
+
+function isoSeconds(now: Date = new Date()): string {
+  // 2026-05-11T18:19:00Z — ISO 8601, seconds resolution, UTC, no fractional seconds.
+  return now.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function isoCompact(now: Date = new Date()): string {
+  // 2026-05-11T181900Z — filename-safe form of the same instant. Date dashes
+  // kept for readability; colons stripped from the time portion.
   const y = now.getUTCFullYear();
-  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  const mo = pad2(now.getUTCMonth() + 1);
+  const d = pad2(now.getUTCDate());
+  const h = pad2(now.getUTCHours());
+  const mi = pad2(now.getUTCMinutes());
+  const s = pad2(now.getUTCSeconds());
+  return `${y}-${mo}-${d}T${h}${mi}${s}Z`;
 }
 
-function currentMonthTitle(now: Date = new Date()): string {
-  const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
-  return `${months[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
+function slugAgent(agent: string | undefined | null): string {
+  const cleaned = (agent ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned || "unknown";
 }
 
-function isoMinutes(now: Date = new Date()): string {
-  // 2026-04-18T09:45Z (no seconds or ms, UTC)
-  return now.toISOString().replace(/:\d{2}\.\d{3}Z$/, "Z");
+function entryFilePath(now: Date, agent: string): string {
+  // journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md
+  return `journal/${now.getUTCFullYear()}/${pad2(now.getUTCMonth() + 1)}/${isoCompact(now)}-${slugAgent(agent)}.md`;
 }
 
-function formatJournalEntry(args: Omit<AppendJournalArgs, "authHeader">, now: Date = new Date()): string {
-  const ts = isoMinutes(now);
+function yamlString(s: string): string {
+  // YAML flow scalar compatible with JSON strings for our content (ASCII tags
+  // and agent names). Newlines defensively flattened.
+  return JSON.stringify(s.replace(/\n/g, " ").trim());
+}
+
+function yamlTagsArray(tags: string[]): string {
+  if (tags.length === 0) return "[]";
+  return `[${tags.map(yamlString).join(", ")}]`;
+}
+
+function formatJournalEntryFile(
+  args: Omit<AppendJournalArgs, "auth">,
+  now: Date = new Date()
+): string {
+  const ts = isoSeconds(now);
   const agent = (args.agent && args.agent.trim()) || "unknown";
 
   const lines: string[] = [];
-  lines.push(`## ${ts} — ${agent}`);
+  lines.push("---");
+  lines.push(`timestamp: ${ts}`);
+  lines.push(`agent: ${yamlString(agent)}`);
+  lines.push(`tags: ${yamlTagsArray(args.tags)}`);
+  lines.push("---");
+  lines.push("");
+  lines.push(`# ${ts} — ${agent}`);
   lines.push("");
   lines.push(`**Summary:** ${args.summary.trim()}`);
   lines.push("");
@@ -503,21 +542,8 @@ function formatJournalEntry(args: Omit<AppendJournalArgs, "authHeader">, now: Da
     lines.push(`**Tags:** ${args.tags.map((t) => t.trim()).join(", ")}`);
     lines.push("");
   }
-  lines.push("---");
-  lines.push("");
 
   return lines.join("\n");
-}
-
-function newMonthlyFile(monthTitle: string): string {
-  return `---
-title: Journal — ${monthTitle}
-description: Raw session observations for later review. Append-only, agent-writable. Promoted to canonical context via human-reviewed PRs.
----
-
-# Journal — ${monthTitle}
-
-`;
 }
 
 async function appendToJournal(args: AppendJournalArgs) {
@@ -538,10 +564,11 @@ async function appendToJournal(args: AppendJournalArgs) {
   }
 
   const now = new Date();
-  const monthSlug = currentMonthSlug(now);
-  const monthTitle = currentMonthTitle(now);
-  const filePath = `journal/${monthSlug}.md`;
+  const agent = (args.agent && args.agent.trim()) || "unknown";
+  const filePath = entryFilePath(now, agent);
   const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+  const fileContent = formatJournalEntryFile(args, now);
 
   const ghHeaders: Record<string, string> = {
     Authorization: `Bearer ${githubToken}`,
@@ -550,38 +577,11 @@ async function appendToJournal(args: AppendJournalArgs) {
     "User-Agent": "ad-nav-mcp",
   };
 
-  // GET current file (if any)
-  const getRes = await fetch(`${apiBase}?ref=${encodeURIComponent(branch)}`, {
-    headers: ghHeaders,
-  });
-
-  let existingContent = "";
-  let sha: string | undefined;
-
-  if (getRes.status === 200) {
-    const fileJson = (await getRes.json()) as { content: string; sha: string; encoding: string };
-    if (fileJson.encoding !== "base64") {
-      return toolError(`Unexpected GitHub encoding: ${fileJson.encoding}`);
-    }
-    existingContent = Buffer.from(fileJson.content, "base64").toString("utf-8");
-    sha = fileJson.sha;
-  } else if (getRes.status === 404) {
-    existingContent = newMonthlyFile(monthTitle);
-  } else {
-    return toolError(`GitHub GET failed (${getRes.status}): ${await getRes.text()}`);
-  }
-
-  const entry = formatJournalEntry(args, now);
-  const newRaw = existingContent.endsWith("\n")
-    ? `${existingContent}${entry}`
-    : `${existingContent}\n${entry}`;
-
-  const putBody: Record<string, unknown> = {
-    message: `Journal entry ${isoMinutes(now)} via MCP`,
-    content: Buffer.from(newRaw, "utf-8").toString("base64"),
+  const putBody = {
+    message: `Journal entry ${isoSeconds(now)} via MCP`,
+    content: Buffer.from(fileContent, "utf-8").toString("base64"),
     branch,
   };
-  if (sha) putBody.sha = sha;
 
   const putRes = await fetch(apiBase, {
     method: "PUT",
@@ -614,6 +614,14 @@ interface GetJournalArgs {
   month?: string;
 }
 
+interface GitHubContentItem {
+  name: string;
+  path: string;
+  type: "file" | "dir" | "symlink" | "submodule";
+  sha: string;
+  size: number;
+}
+
 async function getJournalEntries({ auth, month }: GetJournalArgs) {
   if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
     return toolError(
@@ -632,43 +640,85 @@ async function getJournalEntries({ auth, month }: GetJournalArgs) {
   }
 
   const monthSlug = month ?? currentMonthSlug(new Date());
-  const filePath = `journal/${monthSlug}.md`;
-  const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+  const monthMatch = monthSlug.match(/^(\d{4})-(\d{2})$/);
+  if (!monthMatch) {
+    return toolError(`Invalid month '${monthSlug}'. Expected YYYY-MM.`);
+  }
+  const [, year, mm] = monthMatch;
+  const dirPath = `journal/${year}/${mm}`;
+  const apiDir = `https://api.github.com/repos/${repo}/contents/${dirPath}`;
 
-  const res = await fetch(`${apiBase}?ref=${encodeURIComponent(branch)}`, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "ad-nav-mcp",
-    },
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "ad-nav-mcp",
+  };
+
+  const listRes = await fetch(`${apiDir}?ref=${encodeURIComponent(branch)}`, {
+    headers: ghHeaders,
   });
 
-  if (res.status === 404) {
+  if (listRes.status === 404) {
     return {
       content: [
         {
           type: "text" as const,
-          text: `No journal entries for ${monthSlug} yet. The file ${filePath} does not exist on ${branch}.`,
+          text: `No journal entries for ${monthSlug}. Directory ${dirPath} does not exist on ${branch}.`,
         },
       ],
     };
   }
-  if (!res.ok) {
-    return toolError(`GitHub GET failed (${res.status}): ${await res.text()}`);
+  if (!listRes.ok) {
+    return toolError(`GitHub list failed (${listRes.status}): ${await listRes.text()}`);
   }
 
-  const fileJson = (await res.json()) as { content: string; encoding: string };
-  if (fileJson.encoding !== "base64") {
-    return toolError(`Unexpected GitHub encoding: ${fileJson.encoding}`);
+  const listJson = (await listRes.json()) as GitHubContentItem[];
+  const entryFiles = listJson
+    .filter((item) => item.type === "file" && item.name.endsWith(".md"))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (entryFiles.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `No journal entries for ${monthSlug}. Directory ${dirPath} is empty.`,
+        },
+      ],
+    };
   }
-  const content = Buffer.from(fileJson.content, "base64").toString("utf-8");
+
+  const fetched = await Promise.all(
+    entryFiles.map(async (item) => {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${item.path}?ref=${encodeURIComponent(branch)}`,
+        { headers: ghHeaders }
+      );
+      if (!res.ok) {
+        return { name: item.name, content: `<!-- failed to fetch ${item.path}: ${res.status} -->` };
+      }
+      const fileJson = (await res.json()) as { content: string; encoding: string };
+      if (fileJson.encoding !== "base64") {
+        return {
+          name: item.name,
+          content: `<!-- unexpected encoding for ${item.path}: ${fileJson.encoding} -->`,
+        };
+      }
+      return {
+        name: item.name,
+        content: Buffer.from(fileJson.content, "base64").toString("utf-8"),
+      };
+    })
+  );
+
+  const combined = fetched.map((f) => f.content.trim()).join("\n\n---\n\n");
 
   return {
     content: [
       {
         type: "text" as const,
-        text: content,
+        text: combined,
       },
     ],
   };
