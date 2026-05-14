@@ -2,6 +2,14 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { z } from "zod";
 import { getContextFiles, getContextFile, type ContextFile } from "./content";
 import { SCOPE_CONTEXT_WRITE } from "./oauth";
+import {
+  consumeFlags,
+  createFlag,
+  FLAG_KINDS,
+  FLAG_MAX_LEN,
+  listFlagsForSubject,
+  type FlagKind,
+} from "./flags-storage";
 
 /**
  * Identity resolved from the incoming request's bearer. Populated by the
@@ -39,6 +47,8 @@ TIER 1 — SESSION (not your concern)
 TIER 2 — JOURNAL (agent-writable, append-only, PRIVATE)
   Distilled session signal. Written via the \`append_to_journal\` tool. Stored in a private repo, NOT public. You can be candid here: verbatim quotes, internal tool names, honest pattern observations. Privacy rules around third parties (no real names for CtM colleagues, no Digital Illumination client names, no NDA material) still apply. Use \`get_journal_entries\` to read prior months if you need context.
 
+  Mid-session flags sit just below this tier. Use \`flag_signal\` to mark a moment worth keeping without writing a full entry; the flag survives for 24 hours scoped to your auth subject. At session close, call \`list_flags\` to recall what you flagged, weave the content into a structured journal entry, and pass the flag ids to \`append_to_journal\` so they can be deleted. Flags are NOT a parallel storage tier; they are a staging surface for journal writes.
+
 TIER 3 — CANONICAL CONTEXT (human-edited, do not write)
   Files under content/context/*.md in the public ad-nav repo. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them.
 
@@ -52,8 +62,10 @@ TOOLS
     - session_logging_guide: rules for when and what to log to the journal
   Reads (require auth):
     - get_journal_entries: fetch a month of journal entries (private)
+    - list_flags: recall your own mid-session flags from the last 24 hours
   Writes (require auth):
-    - append_to_journal: append a structured session entry to the private journal
+    - flag_signal: mark a mid-session moment worth keeping (cheap, expires in 24 hours)
+    - append_to_journal: append a structured session entry to the private journal (optionally consuming flag ids)
   Prompts (user-triggered):
     - log-session: slash-command template that instructs you to summarise and log the current session`;
 
@@ -302,6 +314,51 @@ Use this to read your own prior journal observations before composing a new entr
     }
   );
 
+  // --- Mid-session flags ---
+
+  server.tool(
+    "flag_signal",
+    `Mark a moment in the current session worth keeping, without writing a full journal entry. Cheap, fast, expires after 24 hours. Use this when something interesting happens mid-conversation (a decision forming, a preference revealing itself, a follow-up surfacing) and you don't want to commit to a journal entry yet.
+
+At session close, call list_flags to recall what you flagged, weave the content into a structured journal entry, and pass the flag ids back to append_to_journal so they can be deleted.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
+    {
+      text: z
+        .string()
+        .min(1)
+        .max(FLAG_MAX_LEN)
+        .describe(
+          `The observation to flag. One short sentence (max ${FLAG_MAX_LEN} chars). Capture the signal, not the verbatim conversation.`
+        ),
+      kind: z
+        .enum(FLAG_KINDS)
+        .optional()
+        .describe(
+          "Optional category to help downstream distillation: 'decision', 'preference', 'observation', or 'followup'. Mirrors the journal entry fields."
+        ),
+      agent: z
+        .string()
+        .optional()
+        .describe("Client name, e.g. 'Claude Code', 'claude.ai'. Optional."),
+    },
+    async (args) => {
+      return flagSignal({ auth, ...args });
+    }
+  );
+
+  server.tool(
+    "list_flags",
+    `List your own mid-session flags from the last 24 hours, oldest first. Flags are scoped to your auth subject; you cannot see another subject's flags.
+
+Use this at session close to recall what you flagged earlier in the conversation, then write a single journal entry that incorporates the relevant content. Pass the flag ids back to append_to_journal so the flags are deleted once the journal entry is durable.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
+    async () => {
+      return listFlagsTool({ auth });
+    }
+  );
+
   // --- Write tool (journal tier) ---
 
   server.tool(
@@ -314,7 +371,9 @@ WHEN NOT TO USE: trivial sessions, mid-task, or to capture granular activity. Th
 
 Because the journal is private, you can be candid: verbatim quotes, internal tool names, honest pattern observations. Third-party privacy (CtM colleagues, DI clients, NDA material) still applies.
 
-This does NOT write to canonical context files. Those are human-edited.`,
+This does NOT write to canonical context files. Those are human-edited.
+
+If you flagged content mid-session via flag_signal, recall it with list_flags, distribute it into the right fields below (summary/decisions/patterns/followups), and pass the flag ids in flag_ids so the flags are deleted once the entry commits.`,
     {
       summary: z
         .string()
@@ -345,6 +404,12 @@ This does NOT write to canonical context files. Those are human-edited.`,
         .optional()
         .describe(
           "Client name, e.g. 'Claude Code', 'claude.ai', 'Cowork'. Optional. Defaults to 'unknown'."
+        ),
+      flag_ids: z
+        .array(z.string())
+        .default([])
+        .describe(
+          "Mid-session flag ids (from flag_signal / list_flags) to delete after the entry commits. Optional; the flag content itself should already be woven into the fields above. Flags that don't belong to your subject or have expired are silently skipped."
         ),
     },
     async (args) => {
@@ -443,6 +508,104 @@ The privacy rules in SPEC.md apply: no real names for Compare the Market colleag
 
 Ask Adam: "Worth logging this session?" Then act on his answer. Never log silently unless he explicitly delegated the decision.`;
 
+// --- Auth subject derivation ---
+
+/**
+ * Resolve an `AuthContext` to the subject we attribute writes to.
+ *
+ * - Admin requests (static bearer) get the reserved subject "admin". All
+ *   admin-issued flags pool under one identity; there is only one admin.
+ * - OAuth requests with the write scope use their JWT `sub` claim (the
+ *   GitHub login). Each login gets its own private flag pool.
+ * - Anyone else (anonymous, or authenticated without write scope) gets null,
+ *   which the caller turns into an unauthorized tool error.
+ */
+function authSubject(auth: AuthContext): string | null {
+  if (auth.isAdmin) return "admin";
+  if (auth.scopes.includes(SCOPE_CONTEXT_WRITE) && auth.subject) return auth.subject;
+  return null;
+}
+
+// --- flag_signal implementation ---
+
+interface FlagSignalArgs {
+  auth: AuthContext;
+  text: string;
+  kind?: FlagKind;
+  agent?: string;
+}
+
+async function flagSignal(args: FlagSignalArgs) {
+  const subject = authSubject(args.auth);
+  if (!subject) {
+    return toolError(
+      `Unauthorized: flag_signal requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  const flag = await createFlag({
+    subject,
+    text: args.text.trim(),
+    kind: args.kind,
+    agent: args.agent?.trim() || undefined,
+  });
+
+  const kindLabel = flag.kind ? ` [${flag.kind}]` : "";
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Flagged${kindLabel}: ${flag.text}
+id: ${flag.id}
+expires: ${new Date(flag.expires_at).toISOString()}`,
+      },
+    ],
+  };
+}
+
+// --- list_flags implementation ---
+
+interface ListFlagsArgs {
+  auth: AuthContext;
+}
+
+async function listFlagsTool({ auth }: ListFlagsArgs) {
+  const subject = authSubject(auth);
+  if (!subject) {
+    return toolError(
+      `Unauthorized: list_flags requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  const flags = await listFlagsForSubject(subject);
+  if (flags.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "No active flags. Anything you flagged more than 24 hours ago has expired.",
+        },
+      ],
+    };
+  }
+
+  const lines = flags.map((f) => {
+    const ts = new Date(f.created_at).toISOString();
+    const kind = f.kind ? ` [${f.kind}]` : "";
+    const agent = f.agent ? ` (${f.agent})` : "";
+    return `- ${ts}${kind}${agent} — ${f.text}\n  id: ${f.id}`;
+  });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Active flags (${flags.length})\n\n${lines.join("\n")}\n\nPass these ids in append_to_journal's flag_ids field after weaving the content into the entry.`,
+      },
+    ],
+  };
+}
+
 // --- append_to_journal implementation ---
 
 interface AppendJournalArgs {
@@ -453,6 +616,7 @@ interface AppendJournalArgs {
   followups: string[];
   tags: string[];
   agent?: string;
+  flag_ids: string[];
 }
 
 function pad2(n: number): string {
@@ -595,13 +759,36 @@ async function appendToJournal(args: AppendJournalArgs) {
 
   const putJson = (await putRes.json()) as { commit: { sha: string; html_url: string } };
 
+  // Consume any flags the caller said they wove into this entry. Done AFTER
+  // the GitHub write so a failed entry leaves the flags intact for retry.
+  // A failed consume is logged but does NOT fail the tool call: the journal
+  // entry is already durable, and stale flags are non-destructive (they
+  // expire in 24h regardless and would just reappear in the next list_flags).
+  let consumedSummary = "";
+  if (args.flag_ids.length > 0) {
+    const subject = authSubject(args.auth);
+    if (subject) {
+      try {
+        const consumed = await consumeFlags({ subject, ids: args.flag_ids });
+        const requested = args.flag_ids.length;
+        const skipped = requested - consumed.length;
+        consumedSummary = skipped > 0
+          ? `\nFlags consumed: ${consumed.length}/${requested} (${skipped} skipped — wrong subject or expired).`
+          : `\nFlags consumed: ${consumed.length}.`;
+      } catch (err) {
+        console.error("[mcp] flag consume failed after journal write:", err);
+        consumedSummary = `\nFlags requested: ${args.flag_ids.length}. Consume failed (entry is still durable); flags will expire naturally.`;
+      }
+    }
+  }
+
   return {
     content: [
       {
         type: "text" as const,
         text: `Logged session to ${filePath} on ${branch}.
 Commit: ${putJson.commit.sha}
-${putJson.commit.html_url}`,
+${putJson.commit.html_url}${consumedSummary}`,
       },
     ],
   };
