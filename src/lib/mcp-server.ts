@@ -16,6 +16,12 @@ import {
   getCanonicalEmbeddings,
   reciprocalRankFusion,
 } from "./embeddings";
+import {
+  listJournalEmbeddings,
+  previewOf,
+  stripFrontmatter,
+  upsertJournalEmbedding,
+} from "./journal-embeddings-storage";
 
 /**
  * Identity resolved from the incoming request's bearer. Populated by the
@@ -68,6 +74,7 @@ TOOLS
     - session_logging_guide: rules for when and what to log to the journal
   Reads (require auth):
     - get_journal_entries: fetch a month of journal entries (private)
+    - semantic_search_journal: find journal entries semantically similar to a query (across all months)
     - list_flags: recall your own mid-session flags from the last 24 hours
   Writes (require auth):
     - flag_signal: mark a mid-session moment worth keeping (cheap, expires in 24 hours)
@@ -282,6 +289,28 @@ Use this to read your own prior journal observations before composing a new entr
     },
     async ({ month }) => {
       return getJournalEntries({ auth, month });
+    }
+  );
+
+  server.tool(
+    "semantic_search_journal",
+    `Search the private journal by semantic similarity to a query. Embeds the query via OpenAI text-embedding-3-small, ranks every indexed entry by cosine similarity, fetches the top_k entries from adam-corpus, and returns them with their relevance scores.
+
+WHEN TO USE: when you want to recall journal observations relevant to a topic without already knowing the date range. For a specific month, use get_journal_entries. For canonical context about Adam himself, use search_context.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope. Also requires OPENAI_API_KEY on the server; returns an error if unset (this tool has no keyword fallback).`,
+    {
+      query: z.string().min(1).describe("Search term or natural-language query."),
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(5)
+        .describe("How many entries to return. Default 5, max 20."),
+    },
+    async ({ query, top_k }) => {
+      return semanticSearchJournal({ auth, query, topK: top_k });
     }
   );
 
@@ -730,6 +759,34 @@ async function appendToJournal(args: AppendJournalArgs) {
 
   const putJson = (await putRes.json()) as { commit: { sha: string; html_url: string } };
 
+  // Best-effort embed the new entry and upsert it into the journal embedding
+  // index. Done after the GitHub PUT so the entry is already durable. A
+  // failed embed or Firestore write is logged but does NOT fail the tool
+  // call: the backfill script can fill the gap later, and missing entries
+  // just don't surface in semantic_search_journal results.
+  let embeddingSummary = "";
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const body = stripFrontmatter(fileContent);
+      const vec = await embedQuery(body);
+      if (vec) {
+        await upsertJournalEmbedding({
+          path: filePath,
+          timestamp: isoSeconds(now),
+          agent,
+          preview: previewOf(body),
+          embedding: vec,
+        });
+        embeddingSummary = "\nEmbedding indexed.";
+      } else {
+        embeddingSummary = "\nEmbedding skipped: OpenAI returned no vector.";
+      }
+    } catch (err) {
+      console.error("[mcp] journal embedding failed:", err);
+      embeddingSummary = "\nEmbedding skipped: index write failed (entry is still durable; backfill script can recover).";
+    }
+  }
+
   // Consume any flags the caller said they wove into this entry. Done AFTER
   // the GitHub write so a failed entry leaves the flags intact for retry.
   // A failed consume is logged but does NOT fail the tool call: the journal
@@ -759,7 +816,7 @@ async function appendToJournal(args: AppendJournalArgs) {
         type: "text" as const,
         text: `Logged session to ${filePath} on ${branch}.
 Commit: ${putJson.commit.sha}
-${putJson.commit.html_url}${consumedSummary}`,
+${putJson.commit.html_url}${embeddingSummary}${consumedSummary}`,
       },
     ],
   };
@@ -877,6 +934,108 @@ async function getJournalEntries({ auth, month }: GetJournalArgs) {
       {
         type: "text" as const,
         text: combined,
+      },
+    ],
+  };
+}
+
+// --- semantic_search_journal implementation ---
+
+interface SemanticSearchJournalArgs {
+  auth: AuthContext;
+  query: string;
+  topK: number;
+}
+
+async function semanticSearchJournal({ auth, query, topK }: SemanticSearchJournalArgs) {
+  if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: semantic_search_journal requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return toolError(
+      "semantic_search_journal needs OPENAI_API_KEY set on the server. The query has to be embedded at request time; this tool has no keyword fallback. (search_context degrades to keyword-only when the key is missing.)"
+    );
+  }
+
+  const repo = process.env.JOURNAL_REPO;
+  const githubToken = process.env.GITHUB_TOKEN;
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
+  if (!repo || !githubToken) {
+    return toolError(
+      "Journal storage is not configured: set JOURNAL_REPO (owner/repo) and GITHUB_TOKEN."
+    );
+  }
+
+  const queryVec = await embedQuery(query);
+  if (!queryVec) {
+    return toolError("Failed to embed query (OpenAI returned no result). Check OPENAI_API_KEY validity.");
+  }
+
+  const indexed = await listJournalEmbeddings();
+  if (indexed.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "No journal embeddings indexed yet. Run scripts/backfill-journal-embeddings.mjs to embed existing entries, or call append_to_journal at least once to seed the index.",
+        },
+      ],
+    };
+  }
+
+  const scored = indexed
+    .map((item) => ({
+      item,
+      score: cosineSimilarity(queryVec, new Float32Array(item.embedding)),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "ad-nav-mcp",
+  };
+
+  const fetched = await Promise.all(
+    scored.map(async ({ item, score }) => {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${item.path}?ref=${encodeURIComponent(branch)}`,
+        { headers: ghHeaders }
+      );
+      if (!res.ok) {
+        return { item, score, content: `<!-- failed to fetch ${item.path}: ${res.status} -->` };
+      }
+      const fileJson = (await res.json()) as { content: string; encoding: string };
+      if (fileJson.encoding !== "base64") {
+        return {
+          item,
+          score,
+          content: `<!-- unexpected encoding for ${item.path}: ${fileJson.encoding} -->`,
+        };
+      }
+      return {
+        item,
+        score,
+        content: Buffer.from(fileJson.content, "base64").toString("utf-8"),
+      };
+    })
+  );
+
+  const sections = fetched.map((f, idx) => {
+    const scoreStr = f.score.toFixed(3);
+    return `### ${idx + 1}. \`${f.item.path}\` (score ${scoreStr})\n\n${f.content.trim()}`;
+  });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Semantic journal search: "${query}"\n\n${sections.length} result${sections.length === 1 ? "" : "s"} from ${indexed.length} indexed entr${indexed.length === 1 ? "y" : "ies"}.\n\n${sections.join("\n\n---\n\n")}`,
       },
     ],
   };
