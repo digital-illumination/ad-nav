@@ -160,10 +160,16 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 |------|-------------|
 | `session_logging_guide` | Return the rules for when and what to log to the journal. Agents call this to refresh the format or decide if a session is worth logging. |
 
+**Mid-session flags (remote only, authenticated):**
+| Tool | Description |
+|------|-------------|
+| `flag_signal` | Mark a moment in the current session worth keeping, without committing to a full journal entry. Writes a short note to the Firestore `flags` collection, scoped to the caller's auth subject ("admin" for static bearer, JWT `sub` for OAuth). Fields: `text` (required, ≤500 chars), `kind` (optional enum: `decision`, `preference`, `observation`, `followup`), `agent` (optional). Returns the flag id and expiry. Flags auto-expire 24 hours after creation. Same auth as `append_to_journal`. |
+| `list_flags` | List the caller's unexpired flags, oldest first. Scoped to the caller's auth subject; no cross-subject access. Used at session close to recall what was flagged so it can be woven into a journal entry. Returns one line per flag with timestamp, kind, agent, text, and id. Same auth as `append_to_journal`. |
+
 **Journal write tool (remote only, authenticated):**
 | Tool | Description |
 |------|-------------|
-| `append_to_journal` | Write a new structured journal entry as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus`. One PUT to the GitHub Contents API per call; no read-modify-write. Requires `isAdmin` (matches `MCP_WRITE_TOKEN`) or OAuth JWT with `context:write` scope. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent` (all optional). Does NOT write to canonical files. |
+| `append_to_journal` | Write a new structured journal entry as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus`. One PUT to the GitHub Contents API per call; no read-modify-write. Requires `isAdmin` (matches `MCP_WRITE_TOKEN`) or OAuth JWT with `context:write` scope. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent`, `flag_ids` (all optional). `flag_ids` is a cleanup directive: the caller has already woven flag content into the body fields and is asking the server to delete the consumed flag docs after the entry commits. Flags belonging to a different subject or already expired are silently skipped. Does NOT write to canonical files. |
 | `get_journal_entries` | List the `journal/YYYY/MM/` directory for the requested month (defaults to current UTC month) in `adam-corpus`, fetch each entry file in parallel, and return them concatenated as one markdown blob. Same auth as `append_to_journal`. Used by a curator pass or by an agent reviewing prior observations before writing a new entry. |
 
 **Prompts (remote only, user-triggered):**
@@ -209,7 +215,7 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 3. Bearer is a valid JWT (HS256, issuer + audience matching) → subject and scopes from the token.
 4. Any other bearer → 401 with `WWW-Authenticate: Bearer realm="mcp", error="invalid_token", error_description="..."` per RFC 6750.
 
-`append_to_journal` requires `isAdmin` OR the `context:write` scope. All other tools are public.
+`append_to_journal`, `get_journal_entries`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
 
 ##### OAuth 2.1 authorization server
 
@@ -233,8 +239,8 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `/api/oauth/signout` — destroys session
 
 **Scopes:**
-- `context:read` — currently all read tools are public, so this is reserved for future gating
-- `context:write` — required for `append_to_journal`
+- `context:read` — currently all canonical read tools are public, so this is reserved for future gating
+- `context:write` — required for `append_to_journal`, `get_journal_entries`, `flag_signal`, and `list_flags`
 
 **Tokens:**
 - Access tokens are signed JWTs (HS256, `iss=https://ad-nav.co.uk`, `aud=https://ad-nav.co.uk/api/mcp`, 1 hour TTL). Stateless, no Firestore round-trip on MCP requests.
@@ -245,6 +251,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `oauth_clients` — dynamically registered clients
 - `oauth_codes` — short-lived authorization codes (5-minute TTL, single-use, transactional consume)
 - `oauth_refresh_tokens` — refresh tokens with rotation semantics
+- `flags` — mid-session flags, keyed by auth subject, 24-hour expiry. Single-field index on `subject` is automatic; expiry filtering happens in code so no composite index is needed. Module: `src/lib/flags-storage.ts`.
 
 ##### Env vars
 
@@ -272,9 +279,10 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 ### MCP Server (done)
 - Local stdio server in `mcp/` with read tools + resources
 - Remote HTTP endpoint at `/api/mcp` (Streamable HTTP, stateless): usable as a custom connector in claude.ai, Cowork, Claude Desktop
-- Three-tier storage model: live session (ephemeral) → journal (agent-writable append-only log) → canonical context (human-edited)
-- `append_to_journal` write tool: appends structured session entries to the private journal in `adam-corpus` via the GitHub Contents API. Creates monthly files on first write.
-- `get_journal_entries` read tool (auth-gated): returns the raw monthly journal markdown for the requesting agent (or curator) to review.
+- Four-tier storage model: archive (private raw substrate) → live session (ephemeral) → journal (agent-writable, append-only) → canonical context (human-edited). Mid-session flags sit as a staging surface just below the journal tier.
+- `append_to_journal` write tool: writes one structured entry per call as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus` via a single Contents API PUT. Optional `flag_ids` field deletes consumed mid-session flags after the entry commits.
+- `get_journal_entries` read tool (auth-gated): lists the month directory in `adam-corpus`, fetches entries in parallel, returns concatenated markdown.
+- `flag_signal` and `list_flags` (auth-gated): mid-session flagging. Flags live in the Firestore `flags` collection, scoped to the caller's auth subject, auto-expire after 24 hours. Consumed by `append_to_journal` via `flag_ids`.
 - `session_logging_guide` tool: serves the current rules for when and how to log
 - `log-session` prompt: user-triggered slash-command template for manual session logging
 - Server-level MCP `instructions` field: every client is told the tier model on connect
