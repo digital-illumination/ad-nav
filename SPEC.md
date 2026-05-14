@@ -167,11 +167,12 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 | `flag_signal` | Mark a moment in the current session worth keeping, without committing to a full journal entry. Writes a short note to the Firestore `flags` collection, scoped to the caller's auth subject ("admin" for static bearer, JWT `sub` for OAuth). Fields: `text` (required, ≤500 chars), `kind` (optional enum: `decision`, `preference`, `observation`, `followup`), `agent` (optional). Returns the flag id and expiry. Flags auto-expire 24 hours after creation. Same auth as `append_to_journal`. |
 | `list_flags` | List the caller's unexpired flags, oldest first. Scoped to the caller's auth subject; no cross-subject access. Used at session close to recall what was flagged so it can be woven into a journal entry. Returns one line per flag with timestamp, kind, agent, text, and id. Same auth as `append_to_journal`. |
 
-**Journal write tool (remote only, authenticated):**
+**Journal tools (remote only, authenticated):**
 | Tool | Description |
 |------|-------------|
-| `append_to_journal` | Write a new structured journal entry as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus`. One PUT to the GitHub Contents API per call; no read-modify-write. Requires `isAdmin` (matches `MCP_WRITE_TOKEN`) or OAuth JWT with `context:write` scope. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent`, `flag_ids` (all optional). `flag_ids` is a cleanup directive: the caller has already woven flag content into the body fields and is asking the server to delete the consumed flag docs after the entry commits. Flags belonging to a different subject or already expired are silently skipped. Does NOT write to canonical files. |
+| `append_to_journal` | Write a new structured journal entry as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus`. One PUT to the GitHub Contents API per call; no read-modify-write. Also embeds the entry body via OpenAI `text-embedding-3-small` (best-effort, after the PUT succeeds) and upserts into the Firestore `journal_embeddings` collection so it's searchable via `semantic_search_journal`. Requires `isAdmin` (matches `MCP_WRITE_TOKEN`) or OAuth JWT with `context:write` scope. Fields: `summary` (required, ≥50 chars), `decisions`, `patterns`, `followups`, `tags`, `agent`, `flag_ids` (all optional). `flag_ids` is a cleanup directive: the caller has already woven flag content into the body fields and is asking the server to delete the consumed flag docs after the entry commits. Flags belonging to a different subject or already expired are silently skipped. Does NOT write to canonical files. |
 | `get_journal_entries` | List the `journal/YYYY/MM/` directory for the requested month (defaults to current UTC month) in `adam-corpus`, fetch each entry file in parallel, and return them concatenated as one markdown blob. Same auth as `append_to_journal`. Used by a curator pass or by an agent reviewing prior observations before writing a new entry. |
+| `semantic_search_journal` | Vector search across all indexed journal entries. Embeds the query via OpenAI `text-embedding-3-small`, fetches every doc in `journal_embeddings`, ranks by cosine similarity, fetches the top `top_k` entries from `adam-corpus`, and returns them with similarity scores. Requires `isAdmin` or `context:write` AND `OPENAI_API_KEY` on the server; no keyword fallback (use `get_journal_entries` for unindexed access). Defaults: `top_k`=5, max 20. |
 
 **Prompts (remote only, user-triggered):**
 | Prompt | Description |
@@ -216,7 +217,7 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 3. Bearer is a valid JWT (HS256, issuer + audience matching) → subject and scopes from the token.
 4. Any other bearer → 401 with `WWW-Authenticate: Bearer realm="mcp", error="invalid_token", error_description="..."` per RFC 6750.
 
-`append_to_journal`, `get_journal_entries`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
+`append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
 
 ##### OAuth 2.1 authorization server
 
@@ -241,7 +242,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 
 **Scopes:**
 - `context:read` — currently all canonical read tools are public, so this is reserved for future gating
-- `context:write` — required for `append_to_journal`, `get_journal_entries`, `flag_signal`, and `list_flags`
+- `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `flag_signal`, and `list_flags`
 
 **Tokens:**
 - Access tokens are signed JWTs (HS256, `iss=https://ad-nav.co.uk`, `aud=https://ad-nav.co.uk/api/mcp`, 1 hour TTL). Stateless, no Firestore round-trip on MCP requests.
@@ -253,6 +254,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `oauth_codes` — short-lived authorization codes (5-minute TTL, single-use, transactional consume)
 - `oauth_refresh_tokens` — refresh tokens with rotation semantics
 - `flags` — mid-session flags, keyed by auth subject, 24-hour expiry. Single-field index on `subject` is automatic; expiry filtering happens in code so no composite index is needed. Module: `src/lib/flags-storage.ts`.
+- `journal_embeddings` — one doc per indexed journal entry. Doc id is sha256 of the entry's file path. Embedding is a native Firestore number array (1536 doubles, ~24KB per doc). Written best-effort by `append_to_journal` after a successful GitHub PUT; backfilled for existing entries by `scripts/backfill-journal-embeddings.mjs`. No vector index — `semantic_search_journal` fetches all docs and ranks in process. Module: `src/lib/journal-embeddings-storage.ts`.
 
 ##### Env vars
 
@@ -268,8 +270,8 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` — for the upstream GitHub identity flow.
 - `OAUTH_ALLOWLIST` — comma-separated GitHub logins permitted to authenticate. Empty or unset = nobody. Fail-closed.
 
-**Embeddings (optional, enhances `search_context`):**
-- `OPENAI_API_KEY` — used to embed the query string at runtime via `text-embedding-3-small`. Without it, `search_context` runs keyword-only and reports `mode: keyword only (no-key)` in the response. The canonical paragraph embeddings themselves are pre-computed and shipped with the deploy, so no API call happens during build or at the server's startup.
+**Embeddings:**
+- `OPENAI_API_KEY` — used by the server in three places: embedding the query for `search_context` (graceful degradation to keyword-only when missing), embedding the body of every new entry written via `append_to_journal` (graceful degradation to no indexing when missing — the entry is still durable), and embedding the query for `semantic_search_journal` (no fallback — the tool returns an error if missing). Canonical paragraph embeddings are pre-computed by `scripts/build-canonical-embeddings.mjs` and shipped with the deploy. Journal embeddings live in Firestore; existing entries get backfilled by `scripts/backfill-journal-embeddings.mjs`, new entries are indexed automatically.
 
 **Lockdown mode:**
 - `MCP_BEARER_TOKEN` (optional) — when set, transport-level auth is enabled, and reads stop being public. Not used in normal operation.
@@ -286,6 +288,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - Four-tier storage model: archive (private raw substrate) → live session (ephemeral) → journal (agent-writable, append-only) → canonical context (human-edited). Mid-session flags sit as a staging surface just below the journal tier.
 - `append_to_journal` write tool: writes one structured entry per call as its own file at `journal/YYYY/MM/YYYY-MM-DDTHHMMSSZ-{agent-slug}.md` in `adam-corpus` via a single Contents API PUT. Optional `flag_ids` field deletes consumed mid-session flags after the entry commits.
 - `get_journal_entries` read tool (auth-gated): lists the month directory in `adam-corpus`, fetches entries in parallel, returns concatenated markdown.
+- `semantic_search_journal` read tool (auth-gated): embeds the query, ranks all indexed entries by cosine similarity against the `journal_embeddings` Firestore collection, fetches the top results from `adam-corpus`, and returns them with scores. `append_to_journal` indexes each new entry on write (best-effort). Existing entries are backfilled via `scripts/backfill-journal-embeddings.mjs`.
 - `flag_signal` and `list_flags` (auth-gated): mid-session flagging. Flags live in the Firestore `flags` collection, scoped to the caller's auth subject, auto-expire after 24 hours. Consumed by `append_to_journal` via `flag_ids`.
 - `session_logging_guide` tool: serves the current rules for when and how to log
 - `log-session` prompt: user-triggered slash-command template for manual session logging
