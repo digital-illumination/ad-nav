@@ -10,6 +10,12 @@ import {
   listFlagsForSubject,
   type FlagKind,
 } from "./flags-storage";
+import {
+  cosineSimilarity,
+  embedQuery,
+  getCanonicalEmbeddings,
+  reciprocalRankFusion,
+} from "./embeddings";
 
 /**
  * Identity resolved from the incoming request's bearer. Populated by the
@@ -165,56 +171,21 @@ export function createContextMcpServer(options: McpServerOptions = {}): McpServe
 
   server.tool(
     "search_context",
-    "Search across all context files for a keyword or phrase. Returns matching files with relevant excerpts.",
-    { query: z.string().describe("Search term or phrase") },
-    async ({ query }) => {
-      const files = getContextFiles();
-      const lower = query.toLowerCase();
+    `Search the canonical context portfolio for passages relevant to a query. Returns the most relevant paragraphs across all files, ranked by hybrid retrieval (keyword + vector similarity, blended via reciprocal rank fusion).
 
-      const matches = files
-        .filter(
-          (f) =>
-            f.content.toLowerCase().includes(lower) ||
-            f.title.toLowerCase().includes(lower)
-        )
-        .map((f) => {
-          const lines = f.content.split("\n");
-          const matchingLines = lines
-            .filter((line) => line.toLowerCase().includes(lower))
-            .slice(0, 3)
-            .map((line) => line.trim());
-          return { file: f, matchingLines };
-        });
-
-      if (matches.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `No results found for "${query}".`,
-            },
-          ],
-        };
-      }
-
-      const results = matches
-        .map((m) => {
-          const excerpts =
-            m.matchingLines.length > 0
-              ? m.matchingLines.map((l) => `  > ${l}`).join("\n")
-              : "  (match in title)";
-          return `### ${m.file.title} (\`${m.file.filename}\`)\n${excerpts}`;
-        })
-        .join("\n\n");
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `# Search: "${query}"\n\n${matches.length} file(s) matched.\n\n${results}`,
-          },
-        ],
-      };
+Vector retrieval is enabled when the canonical embedding index has been built (scripts/build-canonical-embeddings.mjs) and OPENAI_API_KEY is set on the server. If either is missing, the tool degrades to keyword-only and still returns results.`,
+    {
+      query: z.string().describe("Search term or natural-language query."),
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(5)
+        .describe("How many paragraphs to return. Default 5, max 20."),
+    },
+    async ({ query, top_k }) => {
+      return searchContext({ query, topK: top_k });
     }
   );
 
@@ -906,6 +877,142 @@ async function getJournalEntries({ auth, month }: GetJournalArgs) {
       {
         type: "text" as const,
         text: combined,
+      },
+    ],
+  };
+}
+
+// --- search_context implementation ---
+
+interface SearchContextArgs {
+  query: string;
+  topK: number;
+}
+
+interface ParagraphRecord {
+  id: string;
+  file: string;
+  title: string;
+  index: number;
+  text: string;
+}
+
+/**
+ * Flatten the canonical corpus into paragraphs and ID each one as
+ * `${filename}#${index}`. The same id space is used for keyword and vector
+ * ranking so the two lists can be combined via reciprocal rank fusion.
+ */
+function buildParagraphRecords(): ParagraphRecord[] {
+  const records: ParagraphRecord[] = [];
+  for (const file of getContextFiles()) {
+    const paras = file.content
+      .split(/\n\s*\n/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    paras.forEach((text, idx) => {
+      records.push({
+        id: `${file.filename}#${idx}`,
+        file: file.filename,
+        title: file.title,
+        index: idx,
+        text,
+      });
+    });
+  }
+  return records;
+}
+
+function keywordRank(records: ParagraphRecord[], query: string): string[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  if (tokens.length === 0) return [];
+
+  const scored = records
+    .map((r) => {
+      const lower = r.text.toLowerCase();
+      let score = 0;
+      for (const tok of tokens) if (lower.includes(tok)) score++;
+      return { id: r.id, score };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.id);
+}
+
+async function searchContext({ query, topK }: SearchContextArgs) {
+  const records = buildParagraphRecords();
+  if (records.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "No context files loaded. Check that content/context/ exists.",
+        },
+      ],
+    };
+  }
+
+  // Keyword half: always available, no I/O.
+  const keywordRanked = keywordRank(records, query);
+
+  // Vector half: only fires when the canonical index is loaded AND the server
+  // has an OpenAI key. Either failure silently downgrades to keyword-only.
+  const embeddings = getCanonicalEmbeddings();
+  let vectorRanked: string[] = [];
+  let vectorMode: "ready" | "no-index" | "no-key" | "embed-failed" = "no-index";
+
+  if (embeddings) {
+    const queryVec = await embedQuery(query);
+    if (queryVec) {
+      const scored = embeddings.map((e) => ({
+        id: `${e.file}#${e.paragraph_index}`,
+        score: cosineSimilarity(queryVec, e.embedding),
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      vectorRanked = scored.map((s) => s.id);
+      vectorMode = "ready";
+    } else {
+      vectorMode = process.env.OPENAI_API_KEY ? "embed-failed" : "no-key";
+    }
+  }
+
+  // Reciprocal rank fusion. Empty lists are filtered out so the surviving
+  // list dictates the ranking on its own.
+  const fused = reciprocalRankFusion(
+    [keywordRanked, vectorRanked].filter((l) => l.length > 0),
+    { topN: topK }
+  );
+
+  if (fused.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `No results found for "${query}".`,
+        },
+      ],
+    };
+  }
+
+  const byId = new Map(records.map((r) => [r.id, r]));
+  const mode = vectorMode === "ready" ? "hybrid (keyword + vector)" : `keyword only (${vectorMode})`;
+
+  const sections = fused
+    .map((id, rank) => {
+      const r = byId.get(id);
+      if (!r) return "";
+      return `### ${rank + 1}. ${r.title} (\`${r.file}\`)\n\n${r.text}`;
+    })
+    .filter((s) => s.length > 0);
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Search: "${query}"\n\nMode: ${mode}. ${sections.length} result${sections.length === 1 ? "" : "s"}.\n\n${sections.join("\n\n---\n\n")}`,
       },
     ],
   };
