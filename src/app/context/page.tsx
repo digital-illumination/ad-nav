@@ -21,7 +21,7 @@ export default function ContextPage() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // context_portfolio.md
+            {"// context_portfolio.md"}
           </p>
           <GlitchText
             text="Agent Context"
@@ -37,7 +37,7 @@ export default function ContextPage() {
         {/* API Info */}
         <NeonCard className="mb-8" animated>
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-3">
-            // rest_api
+            {"// rest_api"}
           </h2>
           <p className="text-sm text-text-secondary mb-4">
             AI agents and MCP clients can access this context programmatically:
@@ -46,19 +46,19 @@ export default function ContextPage() {
             <div className="flex flex-col sm:flex-row items-start gap-2">
               <span className="text-neon-pink shrink-0">GET</span>
               <code className="text-neon-cyan">/api/context</code>
-              <span className="text-text-dim">// List all context files</span>
+              <span className="text-text-dim">{"// List all context files"}</span>
             </div>
             <div className="flex flex-col sm:flex-row items-start gap-2">
               <span className="text-neon-pink shrink-0">GET</span>
               <code className="text-neon-cyan">/api/context/identity</code>
-              <span className="text-text-dim">// Get a specific file</span>
+              <span className="text-text-dim">{"// Get a specific file"}</span>
             </div>
             <div className="flex flex-col sm:flex-row items-start gap-2">
               <span className="text-neon-pink shrink-0">GET</span>
               <code className="text-neon-cyan">
                 /.well-known/ai-context.json
               </code>
-              <span className="text-text-dim">// Agent discovery</span>
+              <span className="text-text-dim">{"// Agent discovery"}</span>
             </div>
           </div>
         </NeonCard>
@@ -66,7 +66,7 @@ export default function ContextPage() {
         {/* MCP Server */}
         <NeonCard className="mb-8" animated>
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-3">
-            // mcp_server
+            {"// mcp_server"}
           </h2>
           <p className="text-sm text-text-secondary mb-4">
             The MCP server exposes my full context portfolio to any
@@ -85,19 +85,19 @@ export default function ContextPage() {
                 list_context_files
               </code>
               <span className="text-text-dim">
-                // List all files with titles and descriptions
+                {"// List all files with titles and descriptions"}
               </span>
             </div>
             <div className="flex flex-col sm:flex-row items-start gap-2">
               <code className="text-neon-cyan shrink-0">search_context</code>
               <span className="text-text-dim">
-                // Full-text search across all context files
+                {"// Full-text search across all context files"}
               </span>
             </div>
             <div className="flex flex-col sm:flex-row items-start gap-2">
               <code className="text-neon-cyan shrink-0">get_full_context</code>
               <span className="text-text-dim">
-                // Load entire portfolio as one document
+                {"// Load entire portfolio as one document"}
               </span>
             </div>
           </div>
@@ -111,7 +111,7 @@ export default function ContextPage() {
               <code className="text-neon-cyan">
                 {"context://adam-stacey/{filename}"}
               </code>
-              <span className="text-text-dim">// Individual context file</span>
+              <span className="text-text-dim">{"// Individual context file"}</span>
             </div>
           </div>
 
@@ -120,11 +120,11 @@ export default function ContextPage() {
             remote_connector
           </h3>
           <p className="text-xs text-text-dim mb-3">
-            // For claude.ai, Cowork, Claude Desktop — add as a custom connector.
+            {"// For claude.ai, Cowork, Claude Desktop — add as a custom connector."}
           </p>
           <div className="mb-5">
             <p className="text-xs font-mono text-text-dim mb-1">
-              // Streamable HTTP endpoint
+              {"// Streamable HTTP endpoint"}
             </p>
             <pre className="text-xs font-mono bg-black/40 rounded-lg p-3 overflow-x-auto border border-border-glow">
               <code className="text-neon-cyan">
@@ -138,13 +138,12 @@ export default function ContextPage() {
             local_stdio
           </h3>
           <p className="text-xs text-text-dim mb-3">
-            // For Claude Code, Cursor, Windsurf, Cline, Continue — launches a
-            local process.
+            {"// For Claude Code, Cursor, Windsurf, Cline, Continue — launches a local process."}
           </p>
           <div className="space-y-3">
             <div>
               <p className="text-xs font-mono text-text-dim mb-1">
-                // Claude Code (auto-loaded from .mcp.json in repo root)
+                {"// Claude Code (auto-loaded from .mcp.json in repo root)"}
               </p>
               <pre className="text-xs font-mono bg-black/40 rounded-lg p-3 overflow-x-auto border border-border-glow">
                 <code className="text-text-secondary">
@@ -161,7 +160,7 @@ export default function ContextPage() {
             </div>
             <div>
               <p className="text-xs font-mono text-text-dim mb-1">
-                // Claude Desktop (add to claude_desktop_config.json)
+                {"// Claude Desktop (add to claude_desktop_config.json)"}
               </p>
               <pre className="text-xs font-mono bg-black/40 rounded-lg p-3 overflow-x-auto border border-border-glow">
                 <code className="text-text-secondary">
@@ -177,8 +176,7 @@ export default function ContextPage() {
               </pre>
             </div>
             <p className="text-xs text-text-dim font-mono">
-              // Build first: cd mcp &amp;&amp; npm install &amp;&amp; npm run
-              build
+              {"// Build first: cd mcp && npm install && npm run build"}
             </p>
           </div>
         </NeonCard>

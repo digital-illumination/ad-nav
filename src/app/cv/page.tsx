@@ -179,7 +179,7 @@ export default function CVPage() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // curriculum_vitae.md
+            {"// curriculum_vitae.md"}
           </p>
           <GlitchText
             text="Career Timeline"
@@ -194,7 +194,7 @@ export default function CVPage() {
         {/* Summary */}
         <NeonCard className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // summary
+            {"// summary"}
           </h2>
           <p className="text-text-secondary leading-relaxed mb-4">
             Senior technology leader with 20+ years of experience across engineering
@@ -322,7 +322,7 @@ export default function CVPage() {
         <div className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8 flex items-center gap-3">
             <Briefcase className="w-5 h-5" />
-            // experience
+            {"// experience"}
           </h2>
           <div className="space-y-6">
             {experience.map((entry, entryIndex) => {
@@ -437,7 +437,7 @@ export default function CVPage() {
         {/* Skills */}
         <div className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8">
-            // skills
+            {"// skills"}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {Object.entries(skills).map(([category, { items, color }], index) => {
@@ -474,7 +474,7 @@ export default function CVPage() {
         <div className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8 flex items-center gap-3">
             <GraduationCap className="w-5 h-5" />
-            // education
+            {"// education"}
           </h2>
           <NeonCard>
             <div className="space-y-4">
@@ -502,7 +502,7 @@ export default function CVPage() {
         <div className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8 flex items-center gap-3">
             <Award className="w-5 h-5" />
-            // certifications
+            {"// certifications"}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {Object.entries(certifications).map(([issuer, certs]) => (
@@ -532,7 +532,7 @@ export default function CVPage() {
         <NeonCard animated>
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4 flex items-center gap-3">
             <Heart className="w-5 h-5" />
-            // community
+            {"// community"}
           </h2>
           <ul className="space-y-3">
             {community.map((item) => (

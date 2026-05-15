@@ -53,7 +53,7 @@ export default function Home() {
 
         <div className="relative z-10 max-w-4xl">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // initialising connection...
+            {"// initialising connection..."}
           </p>
 
           <div className="relative w-32 h-32 sm:w-40 sm:h-40 mx-auto mb-6 rounded-full overflow-hidden border-2 border-neon-purple hero-photo-pulse">
@@ -134,7 +134,7 @@ export default function Home() {
       <section className="py-20 px-4">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-2xl font-mono font-bold text-center mb-12">
-            <span className="text-neon-cyan">// </span>
+            <span className="text-neon-cyan">{"// "}</span>
             <span className="gradient-text">quick_overview</span>
           </h2>
 

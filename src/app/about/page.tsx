@@ -93,7 +93,7 @@ export default function AboutPage() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // about.md
+            {"// about.md"}
           </p>
           <GlitchText
             text="Adam Stacey"
@@ -108,7 +108,7 @@ export default function AboutPage() {
         {/* Introduction */}
         <NeonCard className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // introduction
+            {"// introduction"}
           </h2>
           <div className="flex flex-col sm:flex-row gap-6 items-start">
             <div className="relative w-28 h-28 sm:w-36 sm:h-36 shrink-0 rounded-lg overflow-hidden border border-neon-purple/50 shadow-[0_0_15px_var(--neon-purple-glow)]">
@@ -224,7 +224,7 @@ export default function AboutPage() {
         {/* Career Highlights */}
         <NeonCard className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // career_highlights
+            {"// career_highlights"}
           </h2>
           <ul className="space-y-3">
             {[
@@ -250,7 +250,7 @@ export default function AboutPage() {
         {/* Core Competencies */}
         <NeonCard className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // core_competencies
+            {"// core_competencies"}
           </h2>
           <div className="flex flex-wrap gap-3">
             {competencies.map((c) => (
@@ -267,7 +267,7 @@ export default function AboutPage() {
         {/* The Journey — Timeline */}
         <div className="mb-8">
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8 px-4">
-            // the_journey
+            {"// the_journey"}
           </h2>
           <div className="relative pl-8 sm:pl-12">
             {/* Vertical neon line */}
@@ -312,7 +312,7 @@ export default function AboutPage() {
         {/* Personal Note */}
         <NeonCard>
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // off_the_clock
+            {"// off_the_clock"}
           </h2>
           <p className="text-text-secondary leading-relaxed">
             When I&apos;m not at work, I&apos;m either tinkering with my enduro
