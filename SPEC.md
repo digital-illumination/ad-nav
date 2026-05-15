@@ -151,10 +151,11 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 | `search_context` | Hybrid retrieval over canonical context paragraphs. Keyword half ranks paragraphs by query-term coverage; vector half embeds the query via OpenAI `text-embedding-3-small` and ranks paragraphs by cosine similarity against the prebuilt index. Results combined via reciprocal rank fusion (k=60). Returns the top `top_k` paragraphs (default 5, max 20) with file attribution. Degrades gracefully: missing embedding index or unset `OPENAI_API_KEY` → keyword-only, with the mode reported in the response. |
 | `get_full_context` | Load entire canonical portfolio as one document |
 
-**Curation tool (remote only, read):**
+**Curation tools (remote, read):**
 | Tool | Description |
 |------|-------------|
-| `propose_context_update` | Given a session summary or new fact, return ranked canonical candidate files and the relevant paragraphs inside them. Read-only. Intended for a future curator agent deciding whether journal signal has matured enough to warrant a PR against canonical files. Ranks by keyword overlap (title ×3, description ×2, body ×1), filters stop-words. |
+| `propose_context_update` | Given a session summary or new fact, return ranked canonical candidate files and the relevant paragraphs inside them. Read-only, public. The original keyword-based curation primitive: ranks by overlap (title ×3, description ×2, body ×1), filters stop-words. Useful for "I have a snippet, where in canonical might it go?" |
+| `curator_review` | Inverse direction: given a canonical filename, return the top journal entries and archive drops semantically related to it. Read-only. Reuses precomputed canonical paragraph embeddings (no new OpenAI call) and computes cosine against `journal_embeddings` + `archive_embeddings`. Useful for "this canonical file might be stale — what recent material would feed an update?" Requires `isAdmin` or `context:write` (since it reads private journal/archive material). Defaults: `top_k`=10, max 50. |
 
 **Agent guidance (remote only, read):**
 | Tool | Description |
@@ -224,7 +225,7 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 3. Bearer is a valid JWT (HS256, issuer + audience matching) → subject and scopes from the token.
 4. Any other bearer → 401 with `WWW-Authenticate: Bearer realm="mcp", error="invalid_token", error_description="..."` per RFC 6750.
 
-`append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
+`append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `curator_review`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
 
 ##### OAuth 2.1 authorization server
 
@@ -249,7 +250,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 
 **Scopes:**
 - `context:read` — currently all canonical read tools are public, so this is reserved for future gating
-- `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `flag_signal`, and `list_flags`
+- `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `curator_review`, `flag_signal`, and `list_flags`
 
 **Tokens:**
 - Access tokens are signed JWTs (HS256, `iss=https://ad-nav.co.uk`, `aud=https://ad-nav.co.uk/api/mcp`, 1 hour TTL). Stateless, no Firestore round-trip on MCP requests.
@@ -317,9 +318,14 @@ Built in three reviewable commits, each covering one layer:
 
 Verified end-to-end via manual curl (anonymous reads, static-bearer writes, full OAuth authorize + token + write, refresh rotation, replay rejection) and from Claude Desktop's custom connector UI.
 
-### Context Curation (planned)
-- Scheduled curator agent: reads accumulated journal entries, calls `propose_context_update`, drafts changes to a branch, opens a PR against canonical files. Human approval always in the loop. Deferred until the journal has a month or two of material.
-- Section-level edit tool (`replace_section_in_context`): surgical edits within canonical files without replacing whole bodies. Needs a stable anchor mechanism (headings or line ranges). Only relevant once the curator flow exists.
+### Context Curation
+**Done:**
+- `curator_review` tool: given a canonical filename, surfaces the top journal entries and archive drops semantically related to it. Reuses the precomputed canonical paragraph embeddings, so no new OpenAI call per review. Read-only; produces a structured report for a human (or an agent on Adam's behalf) to decide whether the canonical file is due for a refresh. Designed to work even at low corpus volume — no auto-PR, no auto-write to canonical, just retrieval.
+- Companion `propose_context_update` tool (existing): the inverse direction (snippet → canonical candidates) for when an agent has a new observation and wants to know where it might live.
+
+**Planned (deferred until the corpus has built up):**
+- Scheduled curator agent: walks every canonical file via `curator_review`, identifies which ones have the most accumulated divergence, drafts a PR against the highest-priority candidate. Human approval always in the loop. Deferred until the daily-interview pipeline has produced a few weeks of journal + archive material.
+- Section-level edit tool (`replace_section_in_context`): surgical edits within canonical files without replacing whole bodies. Needs a stable anchor mechanism (headings or line ranges). Only relevant once the auto-PR flow exists.
 - Client-side hook on Claude Code (`Stop` hook) to auto-trigger `log-session` at the end of a session. Claude Code-specific; other clients rely on server instructions or manual prompting.
 
 ### Blog Pipeline

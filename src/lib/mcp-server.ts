@@ -68,7 +68,7 @@ TIER 2 — JOURNAL (agent-writable, append-only, PRIVATE)
   Mid-session flags sit just below this tier. Use \`flag_signal\` to mark a moment worth keeping without writing a full entry; the flag survives for 24 hours scoped to your auth subject. At session close, call \`list_flags\` to recall what you flagged, weave the content into a structured journal entry, and pass the flag ids to \`append_to_journal\` so they can be deleted. Flags are NOT a parallel storage tier; they are a staging surface for journal writes.
 
 TIER 3 — CANONICAL CONTEXT (human-edited, do not write)
-  Files under content/context/*.md in the public ad-nav repo. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them.
+  Files under content/context/*.md in the public ad-nav repo. The distilled "About Adam" portfolio. Updated only by a human via PR, or by a curator agent that drafts PRs for human approval. You must NOT write to canonical files directly, even if it seems useful. Instead, log observations to the journal and let the curation pass promote them. Use \`curator_review\` to surface the journal and archive material related to a given canonical file when deciding whether it's due for a refresh.
 
 WHEN TO LOG A SESSION
   At a natural close, or when a meaningful point is reached (a decision made, a preference revealed, a problem solved, follow-ups generated). If the session was trivial, do not log. If in doubt, ask Adam or call \`session_logging_guide\`. Never log without offering first, unless Adam has explicitly said "log this".
@@ -82,6 +82,7 @@ TOOLS
     - get_journal_entries: fetch a month of journal entries (private)
     - semantic_search_journal: find journal entries semantically similar to a query (across all months)
     - semantic_search_archive: find raw archive material (voice memos, interview answers, meeting notes) semantically similar to a query
+    - curator_review: list journal and archive material related to a canonical context file (input for human-reviewed canonical refresh)
     - list_flags: recall your own mid-session flags from the last 24 hours
   Writes (require auth):
     - flag_signal: mark a mid-session moment worth keeping (cheap, expires in 24 hours)
@@ -342,6 +343,35 @@ Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope. A
     },
     async ({ query, top_k }) => {
       return semanticSearchArchive({ auth, query, topK: top_k });
+    }
+  );
+
+  server.tool(
+    "curator_review",
+    `List the journal entries and archive drops semantically related to a given canonical context file. Read-only. Use this when considering whether a canonical file is due for a refresh.
+
+Process: looks up the canonical file's precomputed paragraph embeddings, ranks every indexed journal entry and archive drop by best-match cosine similarity to any of those paragraphs, and returns the top top_k candidates with their tier, path, timestamp, similarity score, and preview text. No new OpenAI calls are made; the comparison reuses embeddings already in storage.
+
+Does NOT auto-draft a PR or modify canonical content. The output is intended as input for a human (or an agent on the user's behalf) deciding whether the accumulated material has matured enough to justify a manual canonical update.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
+    {
+      file: z
+        .string()
+        .min(1)
+        .describe(
+          "Canonical filename without extension (e.g. 'identity', 'decision-log'). Use list_context_files to see available files."
+        ),
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(10)
+        .describe("How many candidate items to return. Default 10, max 50."),
+    },
+    async ({ file, top_k }) => {
+      return curatorReview({ auth, file, topK: top_k });
     }
   );
 
@@ -1429,6 +1459,151 @@ async function semanticSearchArchive({ auth, query, topK }: SemanticSearchArchiv
       {
         type: "text" as const,
         text: `# Semantic archive search: "${query}"\n\n${sections.length} result${sections.length === 1 ? "" : "s"} from ${indexed.length} indexed drop${indexed.length === 1 ? "" : "s"}.\n\n${sections.join("\n\n---\n\n")}`,
+      },
+    ],
+  };
+}
+
+// --- curator_review implementation ---
+
+interface CuratorReviewArgs {
+  auth: AuthContext;
+  file: string;
+  topK: number;
+}
+
+interface CuratorCandidate {
+  tier: "journal" | "archive";
+  path: string;
+  preview: string;
+  bestScore: number;
+  bestCanonicalIndex: number;
+  timestamp: string;
+  attribution: string;
+}
+
+async function curatorReview({ auth, file, topK }: CuratorReviewArgs) {
+  if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: curator_review requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  // Confirm the canonical file exists.
+  const canonicalFile = getContextFile(file);
+  if (!canonicalFile) {
+    return toolError(
+      `Canonical file '${file}' not found. Use list_context_files to see available files.`
+    );
+  }
+
+  // Reuse the precomputed paragraph embeddings for this file. No new OpenAI
+  // call needed — the canonical index already covers every paragraph.
+  const allCanonical = getCanonicalEmbeddings();
+  if (!allCanonical) {
+    return toolError(
+      "Canonical embedding index is missing. Run scripts/build-canonical-embeddings.mjs."
+    );
+  }
+  const canonicalParas = allCanonical.filter((p) => p.file === file);
+  if (canonicalParas.length === 0) {
+    return toolError(
+      `No embeddings indexed for canonical file '${file}'. The index file may be stale; re-run scripts/build-canonical-embeddings.mjs.`
+    );
+  }
+
+  // Pull every journal and archive embedding. Both lists are small (~10s of
+  // items) at this stage, so paying the full listAll is cheap.
+  const [journalItems, archiveItems] = await Promise.all([
+    listJournalEmbeddings(),
+    listArchiveEmbeddings(),
+  ]);
+
+  const candidates: CuratorCandidate[] = [];
+
+  // For each journal entry, find which canonical paragraph it matches best.
+  // The score is the max cosine across canonical paragraphs; the matched
+  // paragraph index is reported so the agent can see WHICH part of canonical
+  // the candidate is relevant to.
+  for (const item of journalItems) {
+    const itemVec = new Float32Array(item.embedding);
+    let bestScore = -Infinity;
+    let bestIndex = 0;
+    for (const para of canonicalParas) {
+      const score = cosineSimilarity(itemVec, para.embedding);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = para.paragraph_index;
+      }
+    }
+    candidates.push({
+      tier: "journal",
+      path: item.path,
+      preview: item.preview,
+      bestScore,
+      bestCanonicalIndex: bestIndex,
+      timestamp: item.timestamp,
+      attribution: `agent: ${item.agent}`,
+    });
+  }
+
+  for (const item of archiveItems) {
+    const itemVec = new Float32Array(item.embedding);
+    let bestScore = -Infinity;
+    let bestIndex = 0;
+    for (const para of canonicalParas) {
+      const score = cosineSimilarity(itemVec, para.embedding);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = para.paragraph_index;
+      }
+    }
+    candidates.push({
+      tier: "archive",
+      path: item.path,
+      preview: item.preview,
+      bestScore,
+      bestCanonicalIndex: bestIndex,
+      timestamp: item.timestamp,
+      attribution: item.source
+        ? `kind: ${item.kind}, source: ${item.source}`
+        : `kind: ${item.kind}`,
+    });
+  }
+
+  candidates.sort((a, b) => b.bestScore - a.bestScore);
+  const top = candidates.slice(0, topK);
+
+  if (top.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `# Curator review: \`${file}\` (${canonicalFile.title})\n\nNo journal entries or archive drops are indexed yet. There's nothing to compare against. Re-run after the corpus has accumulated some material.`,
+        },
+      ],
+    };
+  }
+
+  const sections = top.map((c, idx) => {
+    const scoreStr = c.bestScore.toFixed(3);
+    return [
+      `### ${idx + 1}. \`${c.path}\` (${c.tier})`,
+      `score: ${scoreStr}, best-matched canonical paragraph: #${c.bestCanonicalIndex}, ${c.attribution}, timestamp: ${c.timestamp}`,
+      "",
+      `> ${c.preview}`,
+    ].join("\n");
+  });
+
+  const summary = `${top.length} candidate${top.length === 1 ? "" : "s"} ranked from ${journalItems.length} journal entr${journalItems.length === 1 ? "y" : "ies"} and ${archiveItems.length} archive drop${archiveItems.length === 1 ? "" : "s"}. Each score is the best cosine similarity between the candidate and any paragraph in \`${file}\`.`;
+
+  const footer = `**This tool does not modify canonical content.** Treat the list as input to a human (or agent-on-Adam's-behalf) deciding whether \`${file}\` is due for a refresh. Use \`get_journal_entries\` or \`semantic_search_archive\` to fetch the full content of any candidate before drafting changes.`;
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Curator review: \`${file}\` (${canonicalFile.title})\n\n${summary}\n\n${sections.join("\n\n---\n\n")}\n\n---\n\n${footer}`,
       },
     ],
   };
