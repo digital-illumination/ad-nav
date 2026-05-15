@@ -180,6 +180,7 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 |------|-------------|
 | `drop_to_archive` | Write raw text verbatim to the archive tier (`archive/YYYY/MM/YYYY-MM-DDTHHMMSSsssZ-{kind}.md` in `adam-corpus`). Preserves the user's actual words; no distillation, no schema beyond the frontmatter. After the GitHub PUT succeeds, best-effort embeds the body via `text-embedding-3-small` and upserts into the Firestore `archive_embeddings` collection. Fields: `text` (required), `kind` (required enum: `voice-memo` / `note` / `interview` / `meeting` / `other`), `source` (optional grouping label), `agent` (optional). Requires `isAdmin` or `context:write`. |
 | `semantic_search_archive` | Vector search across all indexed archive drops. Same shape as `semantic_search_journal` but over raw substrate rather than distilled signal. Requires `isAdmin` or `context:write` AND `OPENAI_API_KEY` on the server; no keyword fallback. Defaults: `top_k`=5, max 20. |
+| `search_all` | One-call cross-tier search. Embeds the query once and ranks canonical + journal + archive independently against it; returns top `top_k_per_tier` results per tier, grouped by tier (NOT fused — vector distributions across tiers aren't directly comparable). Saves the agent three roundtrips when it wants the full picture of what the user has said or written about a topic. Requires `isAdmin` or `context:write` AND `OPENAI_API_KEY` on the server. Defaults: `top_k_per_tier`=3, max 10. |
 
 **Prompts (remote only, user-triggered):**
 | Prompt | Description |
@@ -225,7 +226,7 @@ For remote clients that add MCP servers as custom connectors (claude.ai, Cowork,
 3. Bearer is a valid JWT (HS256, issuer + audience matching) → subject and scopes from the token.
 4. Any other bearer → 401 with `WWW-Authenticate: Bearer realm="mcp", error="invalid_token", error_description="..."` per RFC 6750.
 
-`append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `curator_review`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
+`append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `search_all`, `curator_review`, `flag_signal`, and `list_flags` all require `isAdmin` OR the `context:write` scope. The other tools are public.
 
 ##### OAuth 2.1 authorization server
 
@@ -250,7 +251,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 
 **Scopes:**
 - `context:read` — currently all canonical read tools are public, so this is reserved for future gating
-- `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `curator_review`, `flag_signal`, and `list_flags`
+- `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `search_all`, `curator_review`, `flag_signal`, and `list_flags`
 
 **Tokens:**
 - Access tokens are signed JWTs (HS256, `iss=https://ad-nav.co.uk`, `aud=https://ad-nav.co.uk/api/mcp`, 1 hour TTL). Stateless, no Firestore round-trip on MCP requests.

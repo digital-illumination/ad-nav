@@ -82,6 +82,7 @@ TOOLS
     - get_journal_entries: fetch a month of journal entries (private)
     - semantic_search_journal: find journal entries semantically similar to a query (across all months)
     - semantic_search_archive: find raw archive material (voice memos, interview answers, meeting notes) semantically similar to a query
+    - search_all: one-call search across canonical + journal + archive, grouped by tier
     - curator_review: list journal and archive material related to a canonical context file (input for human-reviewed canonical refresh)
     - list_flags: recall your own mid-session flags from the last 24 hours
   Writes (require auth):
@@ -372,6 +373,30 @@ Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
     },
     async ({ file, top_k }) => {
       return curatorReview({ auth, file, topK: top_k });
+    }
+  );
+
+  server.tool(
+    "search_all",
+    `Search across all three indexed tiers (canonical, journal, archive) in a single call. Embeds the query once and ranks each tier independently against it; returns the top top_k_per_tier results from each, grouped by tier.
+
+Tiers are NOT blended into a unified ranking — their vector distributions are different and their content shapes are different (curated portfolio vs distilled session signal vs raw substrate). Grouping by tier is more honest about the comparison limits and lets the agent reason about each tier appropriately.
+
+Use this when you want the full picture of what the user has said or written about a topic without making three separate tool calls (search_context, semantic_search_journal, semantic_search_archive).
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope (since results include private tiers). Also requires OPENAI_API_KEY on the server; returns an error if unset.`,
+    {
+      query: z.string().min(1).describe("Search term or natural-language query."),
+      top_k_per_tier: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .default(3)
+        .describe("How many results to return per tier. Default 3, max 10."),
+    },
+    async ({ query, top_k_per_tier }) => {
+      return searchAll({ auth, query, topK: top_k_per_tier });
     }
   );
 
@@ -1604,6 +1629,173 @@ async function curatorReview({ auth, file, topK }: CuratorReviewArgs) {
       {
         type: "text" as const,
         text: `# Curator review: \`${file}\` (${canonicalFile.title})\n\n${summary}\n\n${sections.join("\n\n---\n\n")}\n\n---\n\n${footer}`,
+      },
+    ],
+  };
+}
+
+// --- search_all implementation ---
+
+interface SearchAllArgs {
+  auth: AuthContext;
+  query: string;
+  topK: number;
+}
+
+/**
+ * Fetch a list of journal/archive entries from GitHub Contents API in parallel.
+ * Each result carries the original metadata plus the entry's markdown content;
+ * a failed fetch becomes an inline HTML comment so the rest of the response
+ * still renders. Shared with semantic_search_journal, semantic_search_archive,
+ * and search_all (the cross-tier reader).
+ */
+async function fetchEntriesFromGitHub<T extends { path: string }>(
+  items: T[],
+  repo: string,
+  branch: string,
+  githubToken: string
+): Promise<Array<{ item: T; content: string }>> {
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "ad-nav-mcp",
+  };
+  return Promise.all(
+    items.map(async (item) => {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${item.path}?ref=${encodeURIComponent(branch)}`,
+        { headers: ghHeaders }
+      );
+      if (!res.ok) {
+        return { item, content: `<!-- failed to fetch ${item.path}: ${res.status} -->` };
+      }
+      const fileJson = (await res.json()) as { content: string; encoding: string };
+      if (fileJson.encoding !== "base64") {
+        return {
+          item,
+          content: `<!-- unexpected encoding for ${item.path}: ${fileJson.encoding} -->`,
+        };
+      }
+      return { item, content: Buffer.from(fileJson.content, "base64").toString("utf-8") };
+    })
+  );
+}
+
+async function searchAll({ auth, query, topK }: SearchAllArgs) {
+  if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: search_all requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return toolError(
+      "search_all needs OPENAI_API_KEY (no keyword fallback at the cross-tier level). Use search_context for keyword-only access to the public tier."
+    );
+  }
+
+  const repo = process.env.JOURNAL_REPO;
+  const githubToken = process.env.GITHUB_TOKEN;
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
+  if (!repo || !githubToken) {
+    return toolError(
+      "Storage is not configured: set JOURNAL_REPO (owner/repo) and GITHUB_TOKEN."
+    );
+  }
+
+  const queryVec = await embedQuery(query);
+  if (!queryVec) {
+    return toolError("Failed to embed query (OpenAI returned no result).");
+  }
+
+  // Rank each tier independently. Canonical reads from the precomputed index;
+  // journal and archive read from Firestore. Run journal + archive in parallel.
+  const canonical = getCanonicalEmbeddings();
+  const [journalItems, archiveItems] = await Promise.all([
+    listJournalEmbeddings(),
+    listArchiveEmbeddings(),
+  ]);
+
+  const canonicalRanked = canonical
+    ? canonical
+        .map((p) => ({ item: p, score: cosineSimilarity(queryVec, p.embedding) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+    : [];
+
+  const journalRanked = journalItems
+    .map((j) => ({ item: j, score: cosineSimilarity(queryVec, new Float32Array(j.embedding)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+
+  const archiveRanked = archiveItems
+    .map((a) => ({ item: a, score: cosineSimilarity(queryVec, new Float32Array(a.embedding)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+
+  // Journal + archive top results need their full markdown fetched from
+  // adam-corpus. Canonical paragraphs are already in memory.
+  const [journalFetched, archiveFetched] = await Promise.all([
+    fetchEntriesFromGitHub(
+      journalRanked.map(({ item }) => item),
+      repo,
+      branch,
+      githubToken
+    ),
+    fetchEntriesFromGitHub(
+      archiveRanked.map(({ item }) => item),
+      repo,
+      branch,
+      githubToken
+    ),
+  ]);
+
+  const canonicalSection =
+    canonicalRanked.length === 0
+      ? canonical
+        ? "_No canonical paragraphs scored against this query._"
+        : "_Canonical embedding index not loaded — run scripts/build-canonical-embeddings.mjs._"
+      : canonicalRanked
+          .map(
+            ({ item, score }, idx) =>
+              `### ${idx + 1}. ${item.title} (\`${item.file}\`, paragraph #${item.paragraph_index}, score ${score.toFixed(3)})\n\n${item.text}`
+          )
+          .join("\n\n---\n\n");
+
+  const journalSection =
+    journalRanked.length === 0
+      ? journalItems.length === 0
+        ? "_No journal embeddings indexed yet._"
+        : "_No journal entries matched._"
+      : journalRanked
+          .map(({ item, score }, idx) => {
+            const content =
+              journalFetched.find((f) => f.item.path === item.path)?.content ?? "(unavailable)";
+            return `### ${idx + 1}. \`${item.path}\` (score ${score.toFixed(3)}, agent: ${item.agent})\n\n${content.trim()}`;
+          })
+          .join("\n\n---\n\n");
+
+  const archiveSection =
+    archiveRanked.length === 0
+      ? archiveItems.length === 0
+        ? "_No archive drops indexed yet — use drop_to_archive or the daily-interview prompt to populate._"
+        : "_No archive drops matched._"
+      : archiveRanked
+          .map(({ item, score }, idx) => {
+            const content =
+              archiveFetched.find((f) => f.item.path === item.path)?.content ?? "(unavailable)";
+            const sourceTag = item.source ? `, source: \`${item.source}\`` : "";
+            return `### ${idx + 1}. \`${item.path}\` (score ${score.toFixed(3)}, kind: ${item.kind}${sourceTag})\n\n${content.trim()}`;
+          })
+          .join("\n\n---\n\n");
+
+  const corpusSummary = `Index sizes: ${canonical?.length ?? 0} canonical paragraph${(canonical?.length ?? 0) === 1 ? "" : "s"}, ${journalItems.length} journal entr${journalItems.length === 1 ? "y" : "ies"}, ${archiveItems.length} archive drop${archiveItems.length === 1 ? "" : "s"}.`;
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Search across all tiers: "${query}"\n\n${corpusSummary} Top ${topK} per tier, ranked independently within each.\n\n## Canonical context\n\n${canonicalSection}\n\n## Journal\n\n${journalSection}\n\n## Archive\n\n${archiveSection}`,
       },
     ],
   };
