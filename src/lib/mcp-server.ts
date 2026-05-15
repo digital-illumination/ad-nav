@@ -22,6 +22,12 @@ import {
   stripFrontmatter,
   upsertJournalEmbedding,
 } from "./journal-embeddings-storage";
+import {
+  ARCHIVE_KINDS,
+  listArchiveEmbeddings,
+  upsertArchiveEmbedding,
+  type ArchiveKind,
+} from "./archive-embeddings-storage";
 
 /**
  * Identity resolved from the incoming request's bearer. Populated by the
@@ -50,8 +56,8 @@ export interface McpServerOptions {
 
 const SERVER_INSTRUCTIONS = `This server hosts Adam Stacey's personal context portfolio. It follows a four-tier storage model. You must understand the tiers before using any write tool.
 
-TIER 0 — ARCHIVE (private, you do not write here)
-  Raw substrate (conversation transcripts, voice memos, decision drafts, meeting notes) in a private repo. Not exposed by this server. Mentioned for completeness so you know where the raw material lives.
+TIER 0 — ARCHIVE (agent-writable, PRIVATE)
+  Raw substrate: voice-memo transcripts, interview answers, meeting notes, decision drafts, anything that should be kept verbatim rather than distilled. Written via the \`drop_to_archive\` tool. Stored in a private repo. Indexed for semantic retrieval via \`semantic_search_archive\`. Use this when you want to preserve the user's actual words (or a verbatim record) rather than a structured summary. The journal tier is for distilled signal; this tier is for the raw substrate that future curation reads from.
 
 TIER 1 — SESSION (not your concern)
   The live conversation with Adam. Ephemeral. Nothing here.
@@ -75,12 +81,15 @@ TOOLS
   Reads (require auth):
     - get_journal_entries: fetch a month of journal entries (private)
     - semantic_search_journal: find journal entries semantically similar to a query (across all months)
+    - semantic_search_archive: find raw archive material (voice memos, interview answers, meeting notes) semantically similar to a query
     - list_flags: recall your own mid-session flags from the last 24 hours
   Writes (require auth):
     - flag_signal: mark a mid-session moment worth keeping (cheap, expires in 24 hours)
+    - drop_to_archive: write raw substrate (voice memos, interview answers, meeting notes) to the archive tier verbatim
     - append_to_journal: append a structured session entry to the private journal (optionally consuming flag ids)
   Prompts (user-triggered):
-    - log-session: slash-command template that instructs you to summarise and log the current session`;
+    - log-session: slash-command template that instructs you to summarise and log the current session
+    - daily-interview: slash-command template that runs a short structured interview, captures raw answers to the archive, and writes a distilled journal entry`;
 
 /**
  * Build a configured `McpServer` instance exposing Adam's context portfolio.
@@ -314,6 +323,28 @@ Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope. A
     }
   );
 
+  server.tool(
+    "semantic_search_archive",
+    `Search the archive tier by semantic similarity to a query. Same shape as semantic_search_journal but over raw substrate (voice memos, interview answers, meeting notes, etc.) rather than distilled journal entries.
+
+WHEN TO USE: when you want the user's actual words on a topic rather than a structured summary. For distilled session signal, use semantic_search_journal. For canonical context about Adam himself, use search_context.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope. Also requires OPENAI_API_KEY on the server; returns an error if unset (this tool has no keyword fallback).`,
+    {
+      query: z.string().min(1).describe("Search term or natural-language query."),
+      top_k: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .default(5)
+        .describe("How many entries to return. Default 5, max 20."),
+    },
+    async ({ query, top_k }) => {
+      return semanticSearchArchive({ auth, query, topK: top_k });
+    }
+  );
+
   // --- Mid-session flags ---
 
   server.tool(
@@ -417,6 +448,45 @@ If you flagged content mid-session via flag_signal, recall it with list_flags, d
     }
   );
 
+  // --- Archive write ---
+
+  server.tool(
+    "drop_to_archive",
+    `Write a raw text drop to the archive tier in Adam's private corpus. Use this for substrate that should be preserved VERBATIM rather than distilled: voice-memo transcripts, interview answers, meeting notes, decision drafts, anything in his own words.
+
+WHEN TO USE: when the agent should preserve content as-is. Per-question responses during a daily-interview flow. A snippet Adam dictated and asked you to "save". A meeting transcript.
+
+WHEN NOT TO USE: for structured session summaries (use append_to_journal — that's the distilled tier). For canonical "About Adam" content (humans only edit those).
+
+After the GitHub PUT succeeds, the drop is best-effort embedded and upserted into the Firestore archive_embeddings collection so it surfaces in semantic_search_archive. A failed embed is logged but does not fail the tool call.
+
+Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
+    {
+      text: z
+        .string()
+        .min(1)
+        .describe("The raw text to archive. Preserved verbatim (no distillation, no reformatting)."),
+      kind: z
+        .enum(ARCHIVE_KINDS)
+        .describe(
+          "Category of substrate. 'voice-memo' for transcribed dictation, 'interview' for answers during a daily-interview flow, 'meeting' for meeting notes, 'note' for free-form notes, 'other' otherwise."
+        ),
+      source: z
+        .string()
+        .optional()
+        .describe(
+          "Optional label grouping related drops, e.g. 'interview:daily-2026-05-14'. Lets a session of related drops be reconstructed later."
+        ),
+      agent: z
+        .string()
+        .optional()
+        .describe("Client name, e.g. 'Claude Code', 'claude.ai'. Optional. Defaults to 'unknown'."),
+    },
+    async (args) => {
+      return dropToArchive({ auth, ...args });
+    }
+  );
+
   // --- Prompts (user-triggered) ---
 
   server.prompt(
@@ -447,6 +517,82 @@ Step 3: call \`append_to_journal\` with these fields:
 Respect the privacy rules: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets.
 
 After the tool returns, show Adam the commit link so he can review.`,
+            },
+          },
+        ],
+      };
+    }
+  );
+
+  server.prompt(
+    "daily-interview",
+    "Run a short structured interview to capture today's signal. Adam dictates answers via Wispr; you preserve each raw response to the archive and write one distilled journal entry at the end.",
+    async () => {
+      const sessionLabel = `interview:daily-${new Date().toISOString().slice(0, 10)}`;
+      return {
+        description: "Run today's structured interview and capture the result.",
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text: `Run a structured daily interview with Adam. Adam will dictate answers via Wispr; your job is to ask the right questions, preserve his raw responses in the archive tier, and at the end write one distilled journal entry.
+
+# Protocol
+
+Step 1: GROUND THE QUESTIONS. Before asking anything, call:
+  - \`get_journal_entries\` for the current UTC month, and the previous one if it exists
+  - \`get_full_context\` to refresh on canonical material
+
+You are looking for: recent themes Adam has been thinking about, projects mentioned in canonical that haven't surfaced in journal entries lately, decisions in flight, anything that warrants a check-in.
+
+Step 2: BUILD A 5-QUESTION SCRIPT. Mix two fixed scaffolding questions with three topical ones. Order from concrete to reflective.
+
+Fixed scaffolding (always ask):
+  Q1. What did you ship, decide, or move forward today?
+  Q2. What's the next concrete thing on your mind for tomorrow or this week?
+
+Topical (you choose three based on the context above). Examples of good topical questions, NOT to be used verbatim:
+  - "I see PicoPouch in your current projects but it hasn't come up in the journal for [N] weeks — what's the current state?"
+  - "Your recent entries have a thread about agent-first delivery. Anything new there?"
+  - "How are the [BT / DSIT / PwC] conversations progressing? Any shifts in how you're framing yourself?"
+
+Pick questions Adam would WANT to answer today, anchored in his actual material. Avoid generic "how are you feeling" prompts.
+
+Step 3: ASK ONE AT A TIME. For each question in turn:
+  a. Ask the question. ONE question per turn, not the full script up-front. Wait for Adam's response.
+  b. When Adam responds, call \`drop_to_archive\` immediately with:
+       - text: his verbatim response (trimmed, no distillation)
+       - kind: "interview"
+       - source: "${sessionLabel}"
+       - agent: your client name if you know it
+  c. Brief acknowledgement (one short sentence, NOT a paraphrase or summary). Move to the next question.
+
+Do NOT distil, summarise, or rephrase Adam's responses during the interview itself. The raw words are the point of the archive tier.
+
+Step 4: AT THE END, write one distilled journal entry via \`append_to_journal\`:
+  - summary: 2-4 sentences synthesising the session
+  - decisions: any decisions Adam made or stated during the interview (array)
+  - patterns: preferences or working-style signals revealed (array)
+  - followups: things Adam mentioned he'd revisit (array)
+  - tags: include "daily-interview" plus anything topical
+  - agent: your client name if known
+
+The five archive drops and the single journal entry are linked by the shared \`source\` label and the timestamps falling within one session.
+
+Step 5: SHOW ADAM the commit link for the journal entry. He can find the five archive drops via the source label if he wants them.
+
+# Privacy
+
+Same rules as logging: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets. If Adam says something that violates these, ask him to confirm before archiving.
+
+# If Adam says skip a question
+
+If Adam wants to skip a question, do not drop anything to the archive for that question and move on. The journal entry should reflect what he chose to answer, not what he skipped.
+
+# Begin
+
+Greet Adam briefly, tell him the session label (${sessionLabel}), and ask the first question.`,
             },
           },
         ],
@@ -1036,6 +1182,253 @@ async function semanticSearchJournal({ auth, query, topK }: SemanticSearchJourna
       {
         type: "text" as const,
         text: `# Semantic journal search: "${query}"\n\n${sections.length} result${sections.length === 1 ? "" : "s"} from ${indexed.length} indexed entr${indexed.length === 1 ? "y" : "ies"}.\n\n${sections.join("\n\n---\n\n")}`,
+      },
+    ],
+  };
+}
+
+// --- drop_to_archive implementation ---
+
+interface DropToArchiveArgs {
+  auth: AuthContext;
+  text: string;
+  kind: ArchiveKind;
+  source?: string;
+  agent?: string;
+}
+
+/**
+ * Build the archive file path. Uses millisecond resolution rather than the
+ * journal's seconds resolution, because archive drops can come in quick
+ * bursts (e.g. several `drop_to_archive` calls during one daily-interview
+ * session). Milliseconds avoid filename collisions without needing a counter
+ * or random suffix.
+ */
+function archiveFilePath(now: Date, kind: ArchiveKind): string {
+  const y = now.getUTCFullYear();
+  const mo = pad2(now.getUTCMonth() + 1);
+  const d = pad2(now.getUTCDate());
+  const h = pad2(now.getUTCHours());
+  const mi = pad2(now.getUTCMinutes());
+  const s = pad2(now.getUTCSeconds());
+  const ms = String(now.getUTCMilliseconds()).padStart(3, "0");
+  return `archive/${y}/${mo}/${y}-${mo}-${d}T${h}${mi}${s}${ms}Z-${kind}.md`;
+}
+
+function isoMillis(now: Date): string {
+  // 2026-05-14T21:36:00.123Z — ISO with milliseconds, UTC.
+  return now.toISOString();
+}
+
+function formatArchiveFile(args: {
+  timestamp: string;
+  kind: ArchiveKind;
+  source?: string;
+  agent: string;
+  text: string;
+}): string {
+  const lines: string[] = [];
+  lines.push("---");
+  lines.push(`timestamp: ${args.timestamp}`);
+  lines.push(`kind: ${args.kind}`);
+  if (args.source) lines.push(`source: ${yamlString(args.source)}`);
+  lines.push(`agent: ${yamlString(args.agent)}`);
+  lines.push("---");
+  lines.push("");
+  lines.push(args.text.trim());
+  lines.push("");
+  return lines.join("\n");
+}
+
+async function dropToArchive(args: DropToArchiveArgs) {
+  if (!args.auth.isAdmin && !args.auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: drop_to_archive requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  const repo = process.env.JOURNAL_REPO;
+  const githubToken = process.env.GITHUB_TOKEN;
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
+  if (!repo || !githubToken) {
+    return toolError(
+      "Archive storage is not configured: set JOURNAL_REPO (owner/repo of the private corpus) and GITHUB_TOKEN."
+    );
+  }
+
+  const now = new Date();
+  const agent = (args.agent && args.agent.trim()) || "unknown";
+  const filePath = archiveFilePath(now, args.kind);
+  const apiBase = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+  const fileContent = formatArchiveFile({
+    timestamp: isoMillis(now),
+    kind: args.kind,
+    source: args.source?.trim() || undefined,
+    agent,
+    text: args.text,
+  });
+
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "ad-nav-mcp",
+  };
+
+  const putRes = await fetch(apiBase, {
+    method: "PUT",
+    headers: { ...ghHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: `Archive drop ${isoMillis(now)} (${args.kind}) via MCP`,
+      content: Buffer.from(fileContent, "utf-8").toString("base64"),
+      branch,
+    }),
+  });
+
+  if (!putRes.ok) {
+    return toolError(`GitHub PUT failed (${putRes.status}): ${await putRes.text()}`);
+  }
+
+  const putJson = (await putRes.json()) as { commit: { sha: string; html_url: string } };
+
+  // Best-effort embed + upsert. Same pattern as append_to_journal: a failed
+  // embed is logged but does NOT fail the tool call — the drop is already
+  // durable in adam-corpus, and the backfill script can recover the index.
+  let embeddingNote = "";
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const vec = await embedQuery(args.text);
+      if (vec) {
+        await upsertArchiveEmbedding({
+          path: filePath,
+          timestamp: isoMillis(now),
+          kind: args.kind,
+          source: args.source?.trim() || undefined,
+          agent,
+          preview: previewOf(args.text),
+          embedding: vec,
+        });
+        embeddingNote = "\nEmbedding indexed.";
+      } else {
+        embeddingNote = "\nEmbedding skipped: OpenAI returned no vector.";
+      }
+    } catch (err) {
+      console.error("[mcp] archive embedding failed:", err);
+      embeddingNote = "\nEmbedding skipped: index write failed (drop is still durable; backfill can recover).";
+    }
+  }
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Archived to ${filePath} on ${branch}.
+Commit: ${putJson.commit.sha}
+${putJson.commit.html_url}${embeddingNote}`,
+      },
+    ],
+  };
+}
+
+// --- semantic_search_archive implementation ---
+
+interface SemanticSearchArchiveArgs {
+  auth: AuthContext;
+  query: string;
+  topK: number;
+}
+
+async function semanticSearchArchive({ auth, query, topK }: SemanticSearchArchiveArgs) {
+  if (!auth.isAdmin && !auth.scopes.includes(SCOPE_CONTEXT_WRITE)) {
+    return toolError(
+      `Unauthorized: semantic_search_archive requires the '${SCOPE_CONTEXT_WRITE}' scope, or the admin bearer.`
+    );
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return toolError(
+      "semantic_search_archive needs OPENAI_API_KEY set on the server. No keyword fallback."
+    );
+  }
+
+  const repo = process.env.JOURNAL_REPO;
+  const githubToken = process.env.GITHUB_TOKEN;
+  const branch = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
+  if (!repo || !githubToken) {
+    return toolError(
+      "Archive storage is not configured: set JOURNAL_REPO (owner/repo) and GITHUB_TOKEN."
+    );
+  }
+
+  const queryVec = await embedQuery(query);
+  if (!queryVec) {
+    return toolError("Failed to embed query (OpenAI returned no result).");
+  }
+
+  const indexed = await listArchiveEmbeddings();
+  if (indexed.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "No archive drops indexed yet. Use drop_to_archive (directly or via the daily-interview prompt) to start populating the archive.",
+        },
+      ],
+    };
+  }
+
+  const scored = indexed
+    .map((item) => ({
+      item,
+      score: cosineSimilarity(queryVec, new Float32Array(item.embedding)),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+
+  const ghHeaders: Record<string, string> = {
+    Authorization: `Bearer ${githubToken}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "ad-nav-mcp",
+  };
+
+  const fetched = await Promise.all(
+    scored.map(async ({ item, score }) => {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${item.path}?ref=${encodeURIComponent(branch)}`,
+        { headers: ghHeaders }
+      );
+      if (!res.ok) {
+        return { item, score, content: `<!-- failed to fetch ${item.path}: ${res.status} -->` };
+      }
+      const fileJson = (await res.json()) as { content: string; encoding: string };
+      if (fileJson.encoding !== "base64") {
+        return {
+          item,
+          score,
+          content: `<!-- unexpected encoding for ${item.path}: ${fileJson.encoding} -->`,
+        };
+      }
+      return {
+        item,
+        score,
+        content: Buffer.from(fileJson.content, "base64").toString("utf-8"),
+      };
+    })
+  );
+
+  const sections = fetched.map((f, idx) => {
+    const scoreStr = f.score.toFixed(3);
+    const sourceTag = f.item.source ? ` source: \`${f.item.source}\`` : "";
+    return `### ${idx + 1}. \`${f.item.path}\` (score ${scoreStr}, kind: ${f.item.kind}${sourceTag})\n\n${f.content.trim()}`;
+  });
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `# Semantic archive search: "${query}"\n\n${sections.length} result${sections.length === 1 ? "" : "s"} from ${indexed.length} indexed drop${indexed.length === 1 ? "" : "s"}.\n\n${sections.join("\n\n---\n\n")}`,
       },
     ],
   };
