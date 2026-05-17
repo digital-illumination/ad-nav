@@ -158,10 +158,12 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 | `propose_context_update` | Given a session summary or new fact, return ranked canonical candidate files and the relevant paragraphs inside them. Read-only, public. The original keyword-based curation primitive: ranks by overlap (title ×3, description ×2, body ×1), filters stop-words. Useful for "I have a snippet, where in canonical might it go?" |
 | `curator_review` | Inverse direction: given a canonical filename, return the top journal entries and archive drops semantically related to it. Read-only. Reuses precomputed canonical paragraph embeddings (no new OpenAI call) and computes cosine against `journal_embeddings` + `archive_embeddings`. Useful for "this canonical file might be stale — what recent material would feed an update?" Requires `isAdmin` or `context:write` (since it reads private journal/archive material). Defaults: `top_k`=10, max 50. |
 
-**Agent guidance (remote only, read):**
+**Agent guidance (remote, read, public):**
 | Tool | Description |
 |------|-------------|
 | `session_logging_guide` | Return the rules for when and what to log to the journal. Agents call this to refresh the format or decide if a session is worth logging. |
+| `get_log_session_script` | Return the log-session protocol text. Byte-identical to the `log-session` MCP prompt (shared builder). Exists because Claude Code does not surface MCP prompts as slash commands, so the `.claude/commands/log-session.md` wrapper calls this tool instead. Public, no private data. |
+| `get_interview_script` | Return the daily-interview protocol text (with today's session label). Byte-identical to the `daily-interview` MCP prompt (shared builder). Same Claude Code rationale: the `.claude/commands/daily-interview.md` wrapper calls this. Public. |
 
 **Mid-session flags (remote only, authenticated):**
 | Tool | Description |
@@ -183,11 +185,18 @@ The context portfolio is exposed to any MCP-compatible client (Claude Code, Clau
 | `semantic_search_archive` | Vector search across all indexed archive drops. Same shape as `semantic_search_journal` but over raw substrate rather than distilled signal. Requires `isAdmin` or `context:write` AND `OPENAI_API_KEY` on the server; no keyword fallback. Defaults: `top_k`=5, max 20. |
 | `search_all` | One-call cross-tier search. Embeds the query once and ranks canonical + journal + archive independently against it; returns top `top_k_per_tier` results per tier, grouped by tier (NOT fused — vector distributions across tiers aren't directly comparable). Saves the agent three roundtrips when it wants the full picture of what the user has said or written about a topic. Requires `isAdmin` or `context:write` AND `OPENAI_API_KEY` on the server. Defaults: `top_k_per_tier`=3, max 10. |
 
-**Prompts (remote only, user-triggered):**
+**Prompts (remote, user-triggered).** MCP prompts for clients that surface them (claude.ai, Claude Desktop, etc.). **Claude Code does not expose MCP prompts as slash commands** (verified May 2026: tools surface, prompts do not, regardless of transport). For Claude Code the same protocols are reached via the mirror tools (`get_log_session_script`, `get_interview_script`) and the `.claude/commands/*.md` wrappers below. Prompt and tool share one builder in `src/lib/mcp-server.ts` (`buildLogSessionScript`, `buildDailyInterviewScript`), so the surfaces never drift.
+
 | Prompt | Description |
 |--------|-------------|
-| `log-session` | Slash-command template that instructs the agent to summarise the current session and call `append_to_journal`. Surfaces as `/log-session` in clients like Claude Desktop. |
-| `daily-interview` | Slash-command template that runs a short structured interview (2 fixed scaffolding questions plus 3 topical questions tailored to the user's recent journal and canonical material). The agent asks one question at a time, drops each raw response to the archive tier via `drop_to_archive` with a shared `source` label (`interview:daily-YYYY-MM-DD`), and at the end writes one distilled journal entry via `append_to_journal`. The shared `source` label and timestamps let related drops be reconstructed later. Designed for voice-driven capture via Wispr (or similar dictation tools). |
+| `log-session` | Instructs the agent to summarise the current session and call `append_to_journal`. |
+| `daily-interview` | Runs a short structured interview (2 fixed scaffolding questions plus 3 topical questions tailored to the user's recent journal and canonical material). The agent asks one question at a time, drops each raw response to the archive tier via `drop_to_archive` with a shared `source` label (`interview:daily-YYYY-MM-DD`), and at the end writes one distilled journal entry via `append_to_journal`. The shared `source` label and timestamps let related drops be reconstructed later. Designed for voice-driven capture via Wispr (or similar dictation tools). |
+
+**Claude Code slash-command wrappers.** Project-scoped commands committed at `.claude/commands/`:
+- `/log-session` → calls `get_log_session_script` and follows it.
+- `/daily-interview` → calls `get_interview_script` and follows it.
+
+These give Claude Code users a bare `/log-session` / `/daily-interview` despite the lack of MCP-prompt support. The command body is a thin instruction (call the tool, follow the output exactly); the protocol itself is never duplicated into the command file. The tool prefix `mcp__adam-stacey-context-remote__` assumes the server is registered under that name in the user's Claude Code config.
 
 **Server-level instructions.** The remote server sets the MCP `instructions` field on connect, advising every client of the four-tier model (archive / session / journal / canonical) and pointing at `session_logging_guide` for details. No client-side config needed.
 
@@ -305,6 +314,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `flag_signal` and `list_flags` (auth-gated): mid-session flagging. Flags live in the Firestore `flags` collection, scoped to the caller's auth subject, auto-expire after 24 hours. Consumed by `append_to_journal` via `flag_ids`.
 - `session_logging_guide` tool: serves the current rules for when and how to log
 - `log-session` prompt: user-triggered slash-command template for manual session logging
+- `get_log_session_script` / `get_interview_script` tools + `.claude/commands/{log-session,daily-interview}.md` wrappers: mirror the two prompts as tools because Claude Code does not surface MCP prompts as slash commands (verified May 2026). Prompt and tool share one builder per script so they never drift.
 - Server-level MCP `instructions` field: every client is told the tier model on connect
 - `propose_context_update` curation tool: ranks candidate files and surfaces relevant paragraphs. Read-only, designed for a future curator pass.
 
