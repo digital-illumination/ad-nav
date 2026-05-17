@@ -78,6 +78,7 @@ TOOLS
     - list_context_files, search_context, get_full_context: browse the canonical portfolio
     - propose_context_update: analyse a summary against existing files before any write
     - session_logging_guide: rules for when and what to log to the journal
+    - get_log_session_script / get_interview_script: the log-session and daily-interview protocols as text. Identical to the same-named MCP prompts; mirrored as tools because some clients (Claude Code) do not surface MCP prompts as slash commands
   Reads (require auth):
     - get_journal_entries: fetch a month of journal entries (private)
     - semantic_search_journal: find journal entries semantically similar to a query (across all months)
@@ -89,9 +90,9 @@ TOOLS
     - flag_signal: mark a mid-session moment worth keeping (cheap, expires in 24 hours)
     - drop_to_archive: write raw substrate (voice memos, interview answers, meeting notes) to the archive tier verbatim
     - append_to_journal: append a structured session entry to the private journal (optionally consuming flag ids)
-  Prompts (user-triggered):
-    - log-session: slash-command template that instructs you to summarise and log the current session
-    - daily-interview: slash-command template that runs a short structured interview, captures raw answers to the archive, and writes a distilled journal entry`;
+  Prompts (user-triggered, for clients that surface MCP prompts):
+    - log-session: summarise and log the current session (same text as get_log_session_script)
+    - daily-interview: run a short structured interview, capture raw answers to the archive, write a distilled journal entry (same text as get_interview_script)`;
 
 /**
  * Build a configured `McpServer` instance exposing Adam's context portfolio.
@@ -106,6 +107,105 @@ TOOLS
  * ignore it. `append_to_journal` requires either `isAdmin` (static bearer) or
  * the `context:write` scope (OAuth-issued JWT).
  */
+
+/**
+ * Single source of truth for the log-session protocol text.
+ *
+ * Surfaced two ways: as the `log-session` MCP prompt (for clients that expose
+ * MCP prompts) and as the `get_log_session_script` tool (for Claude Code,
+ * which does not surface MCP prompts as slash commands — the `.claude/commands`
+ * wrapper calls the tool instead). Define it once here so the two never drift.
+ */
+function buildLogSessionScript(): string {
+  return `Please summarise this session and log it to Adam's journal.
+
+Step 1: call \`session_logging_guide\` if you need the current rules for what belongs in a journal entry.
+
+Step 2: check whether the session is worth logging. If the session was trivial (a quick question, a small edit with no broader signal), stop and tell Adam "nothing worth logging". Otherwise continue.
+
+Step 3: call \`append_to_journal\` with these fields:
+  - summary: 2-4 sentences, what the session was about and the key outcome
+  - decisions: non-obvious choices or opinions formed (array, can be empty)
+  - patterns: preferences or working-style signals revealed, as candidates for canonical promotion (array, can be empty)
+  - followups: things left unfinished (array, can be empty)
+  - tags: free-form tags for cross-reference (array, can be empty)
+  - agent: the name of the client you are running in, if you know it
+
+Respect the privacy rules: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets.
+
+After the tool returns, show Adam the commit link so he can review.`;
+}
+
+/**
+ * Single source of truth for the daily-interview protocol text. Same
+ * dual-surface rationale as buildLogSessionScript: the `daily-interview` MCP
+ * prompt and the `get_interview_script` tool both return this, so Claude Code
+ * (no MCP-prompt support) and prompt-capable clients stay in lockstep.
+ *
+ * `now` is injected so the session label is deterministic per call and the
+ * function stays pure (no hidden Date() dependency).
+ */
+function buildDailyInterviewScript(now: Date): string {
+  const sessionLabel = `interview:daily-${now.toISOString().slice(0, 10)}`;
+  return `Run a structured daily interview with Adam. Adam will dictate answers via Wispr; your job is to ask the right questions, preserve his raw responses in the archive tier, and at the end write one distilled journal entry.
+
+# Protocol
+
+Step 1: GROUND THE QUESTIONS. Before asking anything, call:
+  - \`get_journal_entries\` for the current UTC month, and the previous one if it exists
+  - \`get_full_context\` to refresh on canonical material
+
+You are looking for: recent themes Adam has been thinking about, projects mentioned in canonical that haven't surfaced in journal entries lately, decisions in flight, anything that warrants a check-in.
+
+Step 2: BUILD A 5-QUESTION SCRIPT. Mix two fixed scaffolding questions with three topical ones. Order from concrete to reflective.
+
+Fixed scaffolding (always ask):
+  Q1. What did you ship, decide, or move forward today?
+  Q2. What's the next concrete thing on your mind for tomorrow or this week?
+
+Topical (you choose three based on the context above). Examples of good topical questions, NOT to be used verbatim:
+  - "I see PicoPouch in your current projects but it hasn't come up in the journal for [N] weeks. What's the current state?"
+  - "Your recent entries have a thread about agent-first delivery. Anything new there?"
+  - "How are the partnership conversations progressing? Any shifts in how you're framing yourself?"
+
+Pick questions Adam would WANT to answer today, anchored in his actual material. Avoid generic "how are you feeling" prompts.
+
+Step 3: ASK ONE AT A TIME. For each question in turn:
+  a. Ask the question. ONE question per turn, not the full script up-front. Wait for Adam's response.
+  b. When Adam responds, call \`drop_to_archive\` immediately with:
+       - text: his verbatim response (trimmed, no distillation)
+       - kind: "interview"
+       - source: "${sessionLabel}"
+       - agent: your client name if you know it
+  c. Brief acknowledgement (one short sentence, NOT a paraphrase or summary). Move to the next question.
+
+Do NOT distil, summarise, or rephrase Adam's responses during the interview itself. The raw words are the point of the archive tier.
+
+Step 4: AT THE END, write one distilled journal entry via \`append_to_journal\`:
+  - summary: 2-4 sentences synthesising the session
+  - decisions: any decisions Adam made or stated during the interview (array)
+  - patterns: preferences or working-style signals revealed (array)
+  - followups: things Adam mentioned he'd revisit (array)
+  - tags: include "daily-interview" plus anything topical
+  - agent: your client name if known
+
+The five archive drops and the single journal entry are linked by the shared \`source\` label and the timestamps falling within one session.
+
+Step 5: SHOW ADAM the commit link for the journal entry. He can find the five archive drops via the source label if he wants them.
+
+# Privacy
+
+Same rules as logging: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets. If Adam says something that violates these, ask him to confirm before archiving.
+
+# If Adam says skip a question
+
+If Adam wants to skip a question, do not drop anything to the archive for that question and move on. The journal entry should reflect what he chose to answer, not what he skipped.
+
+# Begin
+
+Greet Adam briefly, tell him the session label (${sessionLabel}), and ask the first question.`;
+}
+
 export function createContextMcpServer(options: McpServerOptions = {}): McpServer {
   const auth = options.auth ?? ANONYMOUS_AUTH;
 
@@ -280,6 +380,32 @@ Vector retrieval is enabled when the canonical embedding index has been built (s
             text: SESSION_LOGGING_GUIDE,
           },
         ],
+      };
+    }
+  );
+
+  // Prompt scripts mirrored as tools. Claude Code does not surface MCP
+  // prompts as slash commands, so the `.claude/commands` wrappers call these
+  // tools instead. Same text as the `log-session` / `daily-interview` MCP
+  // prompts (shared builders), so the two surfaces never drift. Public, like
+  // session_logging_guide — they return instructions, not private data.
+
+  server.tool(
+    "get_log_session_script",
+    "Return the log-session protocol as text to follow. Equivalent to the `log-session` MCP prompt; exists because Claude Code does not expose MCP prompts as slash commands, so the /log-session command wrapper calls this instead. Follow the returned steps exactly.",
+    async () => {
+      return {
+        content: [{ type: "text" as const, text: buildLogSessionScript() }],
+      };
+    }
+  );
+
+  server.tool(
+    "get_interview_script",
+    "Return the daily-interview protocol as text to follow start to finish. Equivalent to the `daily-interview` MCP prompt; exists because Claude Code does not expose MCP prompts as slash commands, so the /daily-interview command wrapper calls this instead. Follow the returned protocol exactly, do not summarise or skip steps.",
+    async () => {
+      return {
+        content: [{ type: "text" as const, text: buildDailyInterviewScript(new Date()) }],
       };
     }
   );
@@ -553,26 +679,7 @@ Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
         messages: [
           {
             role: "user" as const,
-            content: {
-              type: "text" as const,
-              text: `Please summarise this session and log it to Adam's journal.
-
-Step 1: call \`session_logging_guide\` if you need the current rules for what belongs in a journal entry.
-
-Step 2: check whether the session is worth logging. If the session was trivial (a quick question, a small edit with no broader signal), stop and tell Adam "nothing worth logging". Otherwise continue.
-
-Step 3: call \`append_to_journal\` with these fields:
-  - summary: 2-4 sentences, what the session was about and the key outcome
-  - decisions: non-obvious choices or opinions formed (array, can be empty)
-  - patterns: preferences or working-style signals revealed, as candidates for canonical promotion (array, can be empty)
-  - followups: things left unfinished (array, can be empty)
-  - tags: free-form tags for cross-reference (array, can be empty)
-  - agent: the name of the client you are running in, if you know it
-
-Respect the privacy rules: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets.
-
-After the tool returns, show Adam the commit link so he can review.`,
-            },
+            content: { type: "text" as const, text: buildLogSessionScript() },
           },
         ],
       };
@@ -583,72 +690,12 @@ After the tool returns, show Adam the commit link so he can review.`,
     "daily-interview",
     "Run a short structured interview to capture today's signal. Adam dictates answers via Wispr; you preserve each raw response to the archive and write one distilled journal entry at the end.",
     async () => {
-      const sessionLabel = `interview:daily-${new Date().toISOString().slice(0, 10)}`;
       return {
         description: "Run today's structured interview and capture the result.",
         messages: [
           {
             role: "user" as const,
-            content: {
-              type: "text" as const,
-              text: `Run a structured daily interview with Adam. Adam will dictate answers via Wispr; your job is to ask the right questions, preserve his raw responses in the archive tier, and at the end write one distilled journal entry.
-
-# Protocol
-
-Step 1: GROUND THE QUESTIONS. Before asking anything, call:
-  - \`get_journal_entries\` for the current UTC month, and the previous one if it exists
-  - \`get_full_context\` to refresh on canonical material
-
-You are looking for: recent themes Adam has been thinking about, projects mentioned in canonical that haven't surfaced in journal entries lately, decisions in flight, anything that warrants a check-in.
-
-Step 2: BUILD A 5-QUESTION SCRIPT. Mix two fixed scaffolding questions with three topical ones. Order from concrete to reflective.
-
-Fixed scaffolding (always ask):
-  Q1. What did you ship, decide, or move forward today?
-  Q2. What's the next concrete thing on your mind for tomorrow or this week?
-
-Topical (you choose three based on the context above). Examples of good topical questions, NOT to be used verbatim:
-  - "I see PicoPouch in your current projects but it hasn't come up in the journal for [N] weeks — what's the current state?"
-  - "Your recent entries have a thread about agent-first delivery. Anything new there?"
-  - "How are the [BT / DSIT / PwC] conversations progressing? Any shifts in how you're framing yourself?"
-
-Pick questions Adam would WANT to answer today, anchored in his actual material. Avoid generic "how are you feeling" prompts.
-
-Step 3: ASK ONE AT A TIME. For each question in turn:
-  a. Ask the question. ONE question per turn, not the full script up-front. Wait for Adam's response.
-  b. When Adam responds, call \`drop_to_archive\` immediately with:
-       - text: his verbatim response (trimmed, no distillation)
-       - kind: "interview"
-       - source: "${sessionLabel}"
-       - agent: your client name if you know it
-  c. Brief acknowledgement (one short sentence, NOT a paraphrase or summary). Move to the next question.
-
-Do NOT distil, summarise, or rephrase Adam's responses during the interview itself. The raw words are the point of the archive tier.
-
-Step 4: AT THE END, write one distilled journal entry via \`append_to_journal\`:
-  - summary: 2-4 sentences synthesising the session
-  - decisions: any decisions Adam made or stated during the interview (array)
-  - patterns: preferences or working-style signals revealed (array)
-  - followups: things Adam mentioned he'd revisit (array)
-  - tags: include "daily-interview" plus anything topical
-  - agent: your client name if known
-
-The five archive drops and the single journal entry are linked by the shared \`source\` label and the timestamps falling within one session.
-
-Step 5: SHOW ADAM the commit link for the journal entry. He can find the five archive drops via the source label if he wants them.
-
-# Privacy
-
-Same rules as logging: no real names for Compare the Market colleagues, no client names from Digital Illumination, no operational secrets. If Adam says something that violates these, ask him to confirm before archiving.
-
-# If Adam says skip a question
-
-If Adam wants to skip a question, do not drop anything to the archive for that question and move on. The journal entry should reflect what he chose to answer, not what he skipped.
-
-# Begin
-
-Greet Adam briefly, tell him the session label (${sessionLabel}), and ask the first question.`,
-            },
+            content: { type: "text" as const, text: buildDailyInterviewScript(new Date()) },
           },
         ],
       };
