@@ -1,11 +1,19 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { createContextMcpServer, type AuthContext, ANONYMOUS_AUTH } from "@/lib/mcp-server";
+import {
+  createContextMcpServer,
+  type AuthContext,
+  ANONYMOUS_AUTH,
+  AUTH_REQUIRED_TOOLS,
+} from "@/lib/mcp-server";
 import {
   SCOPE_CONTEXT_READ,
   SCOPE_CONTEXT_WRITE,
   parseScopeString,
   verifyAccessToken,
 } from "@/lib/oauth";
+import { BASE_URL } from "@/lib/constants";
+
+const RESOURCE_METADATA_URL = `${BASE_URL}/.well-known/oauth-protected-resource`;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +63,54 @@ function unauthorized(description?: string): Response {
       },
     }
   );
+}
+
+/**
+ * RFC 9728 / MCP-spec auth challenge. The `resource_metadata` parameter is
+ * the critical bit: it points the client at the protected-resource metadata,
+ * which is how an MCP client (claude.ai) discovers the authorization server
+ * and starts the OAuth flow. Without this 401, a client that connects
+ * anonymously, succeeds on public reads, and only gets a tool-level error on
+ * writes never learns it needs to authenticate at all.
+ */
+function authChallenge(error: string, description: string): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "Unauthorized" },
+      id: null,
+    }),
+    {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": `Bearer realm="mcp", error="${error}", error_description="${description}", resource_metadata="${RESOURCE_METADATA_URL}"`,
+      },
+    }
+  );
+}
+
+/**
+ * Does this raw JSON-RPC body contain a `tools/call` for a tool that requires
+ * write auth? Tolerant of single messages and batches; never throws.
+ */
+function callsAuthRequiredTool(rawBody: string): boolean {
+  if (!rawBody) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return false;
+  }
+  const messages = Array.isArray(parsed) ? parsed : [parsed];
+  return messages.some((m) => {
+    if (!m || typeof m !== "object") return false;
+    const msg = m as Record<string, unknown>;
+    if (msg.method !== "tools/call") return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    const name = params?.name;
+    return typeof name === "string" && AUTH_REQUIRED_TOOLS.has(name);
+  });
 }
 
 function checkTransportAuth(req: Request): Response | null {
@@ -123,6 +179,37 @@ async function handle(req: Request): Promise<Response> {
     return unauthorized((err as Error).message);
   }
 
+  // Pre-dispatch OAuth challenge. If this is a write-gated tools/call and the
+  // caller can't satisfy it, answer with a 401 + WWW-Authenticate carrying the
+  // resource_metadata pointer. That is the signal MCP clients use to begin the
+  // OAuth flow. Without it, an anonymous client (claude.ai) just gets a
+  // tool-level error inside a 200 and never authenticates.
+  //
+  // Only POST carries a JSON-RPC body. The body stream is single-use, so we
+  // buffer it and rebuild the Request for the transport.
+  let forwardReq = req;
+  if (req.method === "POST") {
+    const rawBody = await req.text();
+    const authorised =
+      auth.isAdmin || auth.scopes.includes(SCOPE_CONTEXT_WRITE);
+    if (!authorised && callsAuthRequiredTool(rawBody)) {
+      return auth.subject
+        ? authChallenge(
+            "insufficient_scope",
+            "This tool requires the context:write scope. Re-authorise to obtain it."
+          )
+        : authChallenge(
+            "invalid_token",
+            "Authentication required. Discover the authorization server via resource_metadata and obtain a token."
+          );
+    }
+    forwardReq = new Request(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: rawBody,
+    });
+  }
+
   // Stateless: fresh server + transport per request. Each request is
   // self-contained — no session state, no sticky routing needed.
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -134,7 +221,7 @@ async function handle(req: Request): Promise<Response> {
 
   try {
     await server.connect(transport);
-    const response = await transport.handleRequest(req);
+    const response = await transport.handleRequest(forwardReq);
     return response;
   } catch (err) {
     console.error("[mcp] request failed:", err);
