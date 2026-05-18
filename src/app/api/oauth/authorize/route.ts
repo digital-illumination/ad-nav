@@ -148,7 +148,11 @@ export async function POST(req: Request) {
   const target = new URL(redirect_uri);
   target.searchParams.set("code", code.code);
   if (state) target.searchParams.set("state", state);
-  return NextResponse.redirect(target.toString());
+  // 303 See Other, NOT the Next default of 307. The consent form is a POST;
+  // 307 preserves the method, so the browser would re-POST to the client's
+  // OAuth callback, which (per the OAuth spec) only accepts GET — claude.ai
+  // returns 405 Method Not Allowed. 303 forces the redirect to be a GET.
+  return NextResponse.redirect(target.toString(), 303);
 }
 
 // --- Helpers ---
@@ -157,7 +161,10 @@ function redirectWithError(redirect_uri: string, error: string, state: string) {
   const target = new URL(redirect_uri);
   target.searchParams.set("error", error);
   if (state) target.searchParams.set("state", state);
-  return NextResponse.redirect(target.toString());
+  // 303 for the same reason as the success redirect: this is reached from the
+  // POST consent handler (deny / invalid_request), and the client's callback
+  // is GET-only. 303 is also correct for the GET-origin caller (invalid_scope).
+  return NextResponse.redirect(target.toString(), 303);
 }
 
 function errorPage(message: string) {
