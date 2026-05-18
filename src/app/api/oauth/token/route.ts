@@ -6,6 +6,7 @@ import {
 } from "@/lib/oauth-storage";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
+  SUPPORTED_SCOPES,
   signAccessToken,
   verifyPkce,
 } from "@/lib/oauth";
@@ -142,7 +143,12 @@ async function handleRefreshToken(body: Record<string, string>) {
   const client = await readClient(client_id);
   if (!client) return oauthError(401, "invalid_client", "Unknown client_id.");
 
-  const rotated = await rotateRefreshToken(refresh_token);
+  // Broaden to all supported scopes on refresh. Same rationale as the
+  // authorize default (OAUTH_ALLOWLIST is the real gate; a refresh token
+  // only exists because the holder passed it). Without this, clients that
+  // were issued a read-only grant before the default-scope change stay
+  // read-only forever, because they refresh rather than re-authorise.
+  const rotated = await rotateRefreshToken(refresh_token, [...SUPPORTED_SCOPES]);
   if (!rotated) {
     return oauthError(400, "invalid_grant", "Refresh token is invalid, expired, or already used.");
   }

@@ -164,8 +164,17 @@ export async function createRefreshToken(params: {
  * Rotate a refresh token: verify, revoke the old one, issue a new one.
  * Returns the new token on success, or null if the old token is missing,
  * expired, or already revoked.
+ *
+ * `scopesOverride` replaces the rotated token's scopes instead of carrying
+ * the old ones forward. Used by the token endpoint to heal grants that were
+ * issued read-only before the default-scope change: clients refresh rather
+ * than re-authorise, so without an override a read-only grant would rotate
+ * read-only forever.
  */
-export async function rotateRefreshToken(oldToken: string): Promise<StoredRefreshToken | null> {
+export async function rotateRefreshToken(
+  oldToken: string,
+  scopesOverride?: string[]
+): Promise<StoredRefreshToken | null> {
   const firestore = getFirestore();
   const ref = firestore.collection(REFRESH).doc(oldToken);
 
@@ -181,7 +190,7 @@ export async function rotateRefreshToken(oldToken: string): Promise<StoredRefres
   return createRefreshToken({
     client_id: data.client_id,
     subject: data.subject,
-    scopes: data.scopes,
+    scopes: scopesOverride ?? data.scopes,
   });
 }
 
