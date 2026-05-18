@@ -50,6 +50,29 @@ export const ANONYMOUS_AUTH: AuthContext = {
   isAdmin: false,
 };
 
+/**
+ * Tools that require `isAdmin` OR the `context:write` scope. Each handler
+ * below also enforces this itself (defence in depth); this set is the single
+ * source of truth the `/api/mcp` route uses to decide when to answer an
+ * under-authorised `tools/call` with an HTTP 401 + `WWW-Authenticate`
+ * challenge, so MCP clients (claude.ai) actually start the OAuth flow
+ * instead of silently receiving a tool-level error and never authenticating.
+ *
+ * Keep in sync with the per-tool scope checks. If you add a write-gated
+ * tool, add its name here too.
+ */
+export const AUTH_REQUIRED_TOOLS: ReadonlySet<string> = new Set([
+  "append_to_journal",
+  "get_journal_entries",
+  "semantic_search_journal",
+  "drop_to_archive",
+  "semantic_search_archive",
+  "search_all",
+  "curator_review",
+  "flag_signal",
+  "list_flags",
+]);
+
 export interface McpServerOptions {
   auth?: AuthContext;
 }
