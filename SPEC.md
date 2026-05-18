@@ -250,7 +250,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 
 **Registration, authorize, token:**
 - `/api/oauth/register` — dynamic client registration (RFC 7591). Public clients with PKCE are the default; no client secret needed. Enforces https redirect_uris except for localhost loopback.
-- `/api/oauth/authorize` — GET renders a consent page in the site aesthetic. POST processes Approve/Deny. PKCE required (`S256`). Redirects to `/api/oauth/signin?return_to=...` if the user has no session.
+- `/api/oauth/authorize` — GET renders a consent page in the site aesthetic. POST processes Approve/Deny. PKCE required (`S256`). Redirects to `/api/oauth/signin?return_to=...` if the user has no session. When the client does not request a specific `scope`, the server grants **all supported scopes** (`context:read context:write`), not read-only. Rationale: `OAUTH_ALLOWLIST` is the real gate; any caller that reaches consent is already an allowlisted identity, so defaulting to read-only just breaks write-capable clients (e.g. claude.ai) that don't explicitly ask for `context:write`. The consent page still displays the granted scopes.
 - `/api/oauth/token` — `authorization_code` and `refresh_token` grants. Refresh tokens rotate on each use (replayed refresh tokens get `invalid_grant`).
 
 **Identity and session:**
@@ -260,7 +260,7 @@ Both are served via Next.js rewrites to `/api/oauth/metadata/...`.
 - `/api/oauth/signout` — destroys session
 
 **Scopes:**
-- `context:read` — currently all canonical read tools are public, so this is reserved for future gating
+- `context:read` — currently all canonical read tools are public, so this is reserved for future gating. Granted by default alongside `context:write` when a client doesn't request specific scopes
 - `context:write` — required for `append_to_journal`, `get_journal_entries`, `semantic_search_journal`, `drop_to_archive`, `semantic_search_archive`, `search_all`, `curator_review`, `flag_signal`, and `list_flags`
 
 **Tokens:**

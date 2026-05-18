@@ -5,7 +5,7 @@ import {
   filterSupportedScopes,
   htmlEscape,
   parseScopeString,
-  SCOPE_CONTEXT_READ,
+  SUPPORTED_SCOPES,
 } from "@/lib/oauth";
 import { BASE_URL } from "@/lib/constants";
 
@@ -67,8 +67,14 @@ export async function GET(req: Request) {
   if (requestedScopes.length > 0 && scopes.length === 0) {
     return redirectWithError(redirect_uri, "invalid_scope", state);
   }
-  // Default to read-only if the client requested no specific scope.
-  const effectiveScopes = scopes.length > 0 ? scopes : [SCOPE_CONTEXT_READ];
+  // Default to ALL supported scopes when the client doesn't narrow it.
+  // The OAUTH_ALLOWLIST is the real security gate: only allowlisted GitHub
+  // logins can ever reach this point. Once past it, the holder is Adam (or
+  // someone he has explicitly trusted), so capping at read-only because a
+  // particular client forgot to ask for write just breaks the common case.
+  // The user still sees the granted scopes on the consent page and clicks
+  // Approve, so nothing is granted silently.
+  const effectiveScopes = scopes.length > 0 ? scopes : [...SUPPORTED_SCOPES];
 
   const session = await readSession();
   if (!session) {
@@ -127,7 +133,8 @@ export async function POST(req: Request) {
   }
 
   const scopes = filterSupportedScopes(parseScopeString(scopeRaw));
-  const effectiveScopes = scopes.length > 0 ? scopes : [SCOPE_CONTEXT_READ];
+  // Same default as the GET path: all supported scopes when unspecified.
+  const effectiveScopes = scopes.length > 0 ? scopes : [...SUPPORTED_SCOPES];
 
   const code = await createCode({
     client_id,
