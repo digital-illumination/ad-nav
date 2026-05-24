@@ -124,7 +124,7 @@ Cyberpunk aesthetic built with CSS custom properties:
 
 - **Platform:** GCP Cloud Run (europe-west2)
 - **Auth:** Workload Identity Federation (GitHub OIDC, no stored service account keys)
-- **CI/CD:** `.github/workflows/deploy.yml` -- push to main builds Docker image and deploys
+- **CI/CD:** `.github/workflows/deploy.yml` builds the Docker image and deploys on push to main. Uses Node 24-runtime actions (`actions/checkout@v5`, `google-github-actions/auth@v3`, `google-github-actions/setup-gcloud@v3`), bumped from the Node 20 versions GitHub deprecated in 2026
 - **Dockerfile:** Multi-stage Node 20 Alpine build with standalone Next.js output
 - **Infra details:** Resource names, IPs, and load balancer config are in a private runbook, not in this repo
 
