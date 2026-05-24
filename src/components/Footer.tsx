@@ -38,7 +38,7 @@ export default function Footer() {
           {/* Quick Links */}
           <div>
             <h3 className="text-sm font-mono text-neon-cyan mb-3">
-              // navigation
+              {"// navigation"}
             </h3>
             <div className="grid grid-cols-2 gap-1">
               {[
@@ -63,7 +63,7 @@ export default function Footer() {
           {/* Connect */}
           <div>
             <h3 className="text-sm font-mono text-neon-cyan mb-3">
-              // connect
+              {"// connect"}
             </h3>
             <div className="flex flex-col gap-1">
               <a

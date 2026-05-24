@@ -23,7 +23,7 @@ export default function BlogPage() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // blog.md
+            {"// blog.md"}
           </p>
           <GlitchText
             text="Blog"

@@ -28,7 +28,7 @@ export default function Navbar() {
               Ad-Nav
             </span>
             <span className="hidden sm:inline text-xs text-text-secondary font-mono opacity-60">
-              // mapping success
+              {"// mapping success"}
             </span>
           </Link>
 

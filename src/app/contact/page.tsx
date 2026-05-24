@@ -65,7 +65,7 @@ export default function ContactPage() {
         {/* Header */}
         <div className="text-center mb-12">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // contact.md
+            {"// contact.md"}
           </p>
           <GlitchText
             text="Get in Touch"
@@ -187,7 +187,7 @@ export default function ContactPage() {
         {/* Open To */}
         <NeonCard animated>
           <h2 className="text-lg font-mono font-bold text-neon-cyan mb-4">
-            // open_to
+            {"// open_to"}
           </h2>
           <ul className="space-y-3">
             {[

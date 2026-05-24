@@ -179,7 +179,7 @@ export default function ProjectsPage() {
         {/* Header */}
         <div className="text-center mb-16">
           <p className="text-sm font-mono text-neon-cyan mb-4 tracking-widest uppercase">
-            // projects.md
+            {"// projects.md"}
           </p>
           <GlitchText
             text="Projects"
@@ -198,7 +198,8 @@ export default function ProjectsPage() {
               {/* Section heading */}
               <h2 className="text-lg font-mono font-bold text-neon-cyan mb-8 flex items-center gap-3">
                 {section.icon}
-                // {section.heading}
+                {"// "}
+                {section.heading}
               </h2>
 
               {/* Project cards */}
