@@ -43,7 +43,7 @@ Roughly 20% on each of five things:
 
 ## Coding in the Day Job
 
-I haven't written or reviewed production code in the day job for three years, and the Head of Technology role isn't really hands-on by design. But I'm hands-on in a different way now: I do a lot of agent-first proof-of-concepts to test new approaches, evaluate tooling, and work out how to land spec-driven development with the teams. The Level 7 AI & Data Science Apprenticeship has me doing a lot of agent-driven coding too, which feeds straight back into the day job.
+I haven't written or reviewed production code in the day job for three years, and the Head of Technology role isn't really hands-on by design. But I'm hands-on in a different way now: I do a lot of agent-first proof-of-concepts to test new approaches, evaluate tooling, and work out how to land spec-driven development with the teams. The Level 7 AI & Data Science Apprenticeship (completed July 2026, graded Merit) involved a lot of agent-driven coding too, and that way of working has fed straight back into the day job.
 
 Outside CtM, the keyboard time goes into PicoPouch and the wider Digital Illumination work — all agent-first.
 
