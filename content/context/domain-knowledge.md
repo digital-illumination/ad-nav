@@ -98,7 +98,7 @@ Being honest about the edges:
 
 - **System design at scale** — I have good knowledge and held my own in a serious interview process on this, but it's an area where I want to move from "good" to "excellent." Understanding the nuances of distributed systems at massive scale is something I'm deliberately strengthening as a technology leader.
 - **Agent orchestration** — I understand agent-first delivery and I'm building individual agents (PicoPouch, Downton), but the multi-agent orchestration layer — how you coordinate a roster of agents to deliver complex outcomes together — is the frontier I'm actively exploring through the OpenClaw / Downton / N8N setup at home.
-- **ML depth** — the Level 7 apprenticeship has given me a solid foundation, but I'd call myself competent rather than expert. I can evaluate approaches, make architectural decisions, and build POCs — but I'm not the person who's going to hand-tune a transformer from scratch.
+- **ML depth** — the Level 7 apprenticeship (completed July 2026, graded Merit with Distinction in two of the three assessments) has given me a solid formal foundation, but I'd still call myself competent rather than expert. I can evaluate approaches, make architectural decisions, and build POCs — but I'm not the person who's going to hand-tune a transformer from scratch.
 
 ## What People Actually Come to Me For
 

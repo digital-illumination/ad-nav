@@ -58,12 +58,9 @@ A Late 2018 Mac Mini I've turned into a dedicated personal agent host for the St
 Rebuilding from WordPress to a custom Next.js site on GCP Cloud Run. Dual-purpose — human readable *and* agent-readable. Phase 1 complete (cyberpunk theme, all pages, blog pipeline, API routes, first context file). Currently in Phase 2: drafting the context portfolio (this file included).
 
 ### Level 7 AI & Data Science Apprenticeship
-**Effectively complete** — all coursework, documentation, and reports are done. Final assessments in the next couple of weeks:
+**Complete.** Results came through in July 2026: Merit overall, with Distinction in both interview-based assessments (the project walkthrough on the automated partner mapping work, and the professional discussion) and a Pass in the written technical test.
 
-- **AM1 / AM2:** Project interviews walking through trade-offs and decisions on the automated partner mapping project
-- **AM3:** Written test — how I'd solve a given problem using the methods from the course
-
-Should be fully qualified within a month of this being written.
+The line from the assessors' summary I'll actually keep: bridging technical, commercial and governance considerations shows "the mindset required for effective AI leadership". That is a fair description of the job I'm trying to do, so it was good to hear it from an independent panel. The formal ML foundation now sits behind the agent-first delivery work above.
 
 ## Digital Illumination
 
