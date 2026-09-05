@@ -67,7 +67,7 @@ I work out of hours fairly often — it suits my rhythm, and my days are stacked
 
 A real email I sent to a small client team in March 2026 (211 words), owning a configuration error and explaining the fix. Nothing has been changed except removing the signature block. Ground drafts against this rather than against the rules above: the shape is what to copy.
 
-What to notice: the first sentence says what happened and that it is fixed; paragraphs are one or two sentences; the fix is a three-item list with a bold-free label and a plain-English effect; the close is two short lines and then "Many thanks / Adam"; contractions appear naturally in a message to a team I work with every day.
+What to notice: the first sentence says what happened and that it is fixed; paragraphs are one or two sentences; the fix is a three-item list with a bold-free label and a plain-English effect; the close is two short lines and then "Many thanks / Adam"; contractions appear naturally in a working message to a team I deal with every day. I write uncontracted for a first message to someone, or anything formal, exec-facing, procurement-facing, or contractual, but not for the daily working traffic this sample is drawn from.
 
 ```
 Hi all,
