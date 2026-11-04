@@ -1,57 +1,92 @@
-name: Deploy to Cloud Run
+name: Deploy to Azure Container Apps
+
+# Builds the site image, pushes it to the shared Digital Illumination
+# registry (`digitalillumination`) and rolls the `ad-nav` Container App in
+# `di-website-env` (resource group `di-website`, UK South) onto it.
+#
+# Sign-in is OpenID Connect to the user-assigned identity `id-adnav-ci`,
+# which holds a federated credential for this repository's `main` branch,
+# AcrPush on the registry and Contributor on the `ad-nav` Container App only.
+# No secret is stored in GitHub: the three ids below are repository
+# variables, and the app's own secrets live in Key Vault (`di-website-kv`),
+# read at runtime by the app's managed identity.
+#
+# Scale: 0 to 3 replicas, the same as Cloud Run's --min-instances 0. The
+# deploy never changes min replicas; set it on the app if a warm replica is
+# wanted.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 env:
-  PROJECT_ID: ad-nav
-  REGION: europe-west2
-  SERVICE: ad-nav
-  REPOSITORY: ad-nav
-  IMAGE: europe-west2-docker.pkg.dev/ad-nav/ad-nav/site
+  AZURE_RESOURCE_GROUP: di-website
+  AZURE_CONTAINER_APP: ad-nav
+  ACR_NAME: digitalillumination
+  ACR_LOGIN_SERVER: digitalillumination.azurecr.io
+  IMAGE_NAME: ad-nav
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v3
+      - name: Registry login
+        run: az acr login --name "$ACR_NAME" --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+      - name: Set image tag
+        id: tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push container image
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to Container Apps
         run: |
-          docker build -t ${{ env.IMAGE }}:${{ github.sha }} -t ${{ env.IMAGE }}:latest .
-          docker push ${{ env.IMAGE }}:${{ github.sha }}
-          docker push ${{ env.IMAGE }}:latest
+          az containerapp update \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}" \
+            --image "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" \
+            --revision-suffix "${{ steps.tag.outputs.tag }}-${{ github.run_attempt }}"
 
-      - name: Deploy to Cloud Run
+      - name: Smoke test
         run: |
-          gcloud run deploy ${{ env.SERVICE }} \
-            --image ${{ env.IMAGE }}:${{ github.sha }} \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 3000 \
-            --memory 512Mi \
-            --cpu 1 \
-            --min-instances 0 \
-            --max-instances 3 \
-            --project ${{ env.PROJECT_ID }}
+          FQDN=$(az containerapp show \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          # Allow for a scale-from-zero start.
+          for path in / /api/context /.well-known/oauth-authorization-server; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "https://$FQDN$path")
+            echo "$path returned HTTP $status"
+            if [ "$status" != "200" ]; then
+              echo "::error::Smoke test failed on $path (HTTP $status)"
+              exit 1
+            fi
+          done

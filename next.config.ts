@@ -14,6 +14,15 @@ const securityHeaders = [
   },
 ];
 
+const CANONICAL_ORIGIN = "https://ad-nav.co.uk";
+const NON_CANONICAL_HOSTS = [
+  "www.ad-nav.co.uk",
+  "adamstacey.co.uk",
+  "www.adamstacey.co.uk",
+  "adamstacey.com",
+  "www.adamstacey.com",
+];
+
 const nextConfig: NextConfig = {
   output: "standalone",
   experimental: {
@@ -22,6 +31,19 @@ const nextConfig: NextConfig = {
     // visitors are first-timers, so the caching trade-off is worth the LCP
     // win. See: next/docs/.../inlineCss.md
     inlineCss: true,
+  },
+  async redirects() {
+    // The alternate domains 301 to the canonical host, keeping the path and
+    // query. On Google this lived in the load balancer's URL map; on Azure
+    // Container Apps there is no edge rule, so the app does it. Any other
+    // host (the canonical one, the *.azurecontainerapps.io address, local
+    // dev) is served as is.
+    return NON_CANONICAL_HOSTS.map((host) => ({
+      source: "/:path*",
+      has: [{ type: "host" as const, value: host.replace(/\./g, "\\.") }],
+      destination: `${CANONICAL_ORIGIN}/:path*`,
+      statusCode: 301 as const,
+    }));
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

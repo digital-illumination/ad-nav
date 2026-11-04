@@ -1,8 +1,8 @@
-import { getFirestore } from "./firestore";
+import { clean, getContainer, readItem, ttlFor } from "./cosmos";
 import { newOpaqueToken } from "./oauth";
 
 /**
- * Firestore-backed storage for mid-session flags.
+ * Cosmos DB storage for mid-session flags.
  *
  * Flags are short notes an agent drops during a session to mark something
  * worth keeping. They sit below the journal tier in maturity: cheaper to
@@ -11,11 +11,13 @@ import { newOpaqueToken } from "./oauth";
  * structured journal entry, and passes the consumed ids back to the journal
  * write tool so the flags can be deleted.
  *
- * Collection: `flags`. Single-field index on `subject` is automatic; no
- * composite index needed because expiry filtering is done client-side.
+ * Container: `flags`, partitioned on `subject`, so listing a subject's flags
+ * is a single-partition query and a lookup by id under the wrong subject
+ * simply misses. Expiry filtering is done in code; the per-item TTL only
+ * cleans up old documents.
  *
  * Schema fields:
- *   id          — random opaque id, doc id too
+ *   id          — random opaque id, the Cosmos item id too
  *   subject     — auth subject ("admin" for static-bearer, JWT sub for OAuth)
  *   text        — the observation (capped at FLAG_MAX_LEN by the caller)
  *   kind        — optional category for downstream merging
@@ -59,25 +61,27 @@ export async function createFlag(params: {
     created_at: now,
     expires_at: now + FLAG_TTL_MS,
   };
-  await getFirestore().collection(FLAGS).doc(id).set(doc);
+  await getContainer(FLAGS).items.upsert({ ...doc, ttl: ttlFor(doc.expires_at) });
   return doc;
 }
 
 /**
  * List flags belonging to a subject that have not yet expired, oldest first.
- * Filtering by `expires_at` happens in code (not in the query) so we don't
- * need a composite Firestore index. The 24h TTL keeps the per-subject set
- * small enough that this stays cheap.
+ * Filtering by `expires_at` happens in code (not in the query), as it did on
+ * Firestore. The 24h TTL keeps the per-subject set small enough that this
+ * stays cheap.
  */
 export async function listFlagsForSubject(subject: string): Promise<StoredFlag[]> {
-  const snap = await getFirestore()
-    .collection(FLAGS)
-    .where("subject", "==", subject)
-    .get();
+  const { resources } = await getContainer(FLAGS)
+    .items.query<Record<string, unknown>>(
+      { query: "SELECT * FROM c WHERE c.subject = @subject", parameters: [{ name: "@subject", value: subject }] },
+      { partitionKey: subject }
+    )
+    .fetchAll();
 
   const now = Date.now();
-  return snap.docs
-    .map((d) => d.data() as StoredFlag)
+  return resources
+    .map((r) => clean<StoredFlag>(r, true))
     .filter((f) => f.expires_at > now)
     .sort((a, b) => a.created_at - b.created_at);
 }
@@ -88,9 +92,10 @@ export async function listFlagsForSubject(subject: string): Promise<StoredFlag[]
  * already expired are silently ignored, so a caller cannot use this to probe
  * for other subjects' flags.
  *
- * Reads + deletes in a single batched round trip. Not transactional across
- * the read/delete boundary, which is acceptable because flags are themselves
- * ephemeral and idempotent on re-consume (a missing flag is just skipped).
+ * Point reads under the caller's own subject (the partition key), then
+ * deletes. Not transactional across the read/delete boundary, which is
+ * acceptable because flags are themselves ephemeral and idempotent on
+ * re-consume (a missing flag is just skipped).
  */
 export async function consumeFlags(params: {
   subject: string;
@@ -98,27 +103,28 @@ export async function consumeFlags(params: {
 }): Promise<StoredFlag[]> {
   if (params.ids.length === 0) return [];
 
-  const firestore = getFirestore();
-  const refs = params.ids.map((id) => firestore.collection(FLAGS).doc(id));
-  const snaps = await firestore.getAll(...refs);
+  const ids = [...new Set(params.ids)];
+  const found = await Promise.all(
+    ids.map((id) => readItem<StoredFlag>(FLAGS, id, params.subject, true))
+  );
 
   const consumed: StoredFlag[] = [];
   const now = Date.now();
-  const batch = firestore.batch();
-
-  for (const snap of snaps) {
-    if (!snap.exists) continue;
-    const data = snap.data() as StoredFlag | undefined;
+  for (const data of found) {
     if (!data) continue;
     if (data.subject !== params.subject) continue;
     if (data.expires_at < now) continue;
     consumed.push(data);
-    batch.delete(snap.ref);
   }
 
-  if (consumed.length > 0) {
-    await batch.commit();
-  }
+  await Promise.all(
+    consumed.map((f) =>
+      getContainer(FLAGS)
+        .item(f.id, params.subject)
+        .delete()
+        .catch(() => {})
+    )
+  );
 
   return consumed;
 }

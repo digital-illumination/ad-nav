@@ -1,11 +1,13 @@
-import { getFirestore } from "./firestore";
+import { clean, cosmosStatus, getContainer, readItem, ttlFor } from "./cosmos";
 import { newOpaqueToken } from "./oauth";
 
 /**
- * Firestore-backed storage for OAuth 2.1 artefacts: registered clients,
- * authorization codes, and refresh tokens.
+ * Cosmos DB storage for OAuth 2.1 artefacts: registered clients,
+ * authorization codes, and refresh tokens. Each document's Cosmos `id` (and
+ * partition key) is the client id, code or token itself, so every read is a
+ * point read. The `id` and Cosmos system fields are stripped on read.
  *
- * Collections:
+ * Containers:
  *   oauth_clients         — registered OAuth clients (from dynamic registration)
  *   oauth_codes           — short-lived authorization codes (single-use)
  *   oauth_refresh_tokens  — longer-lived refresh tokens
@@ -53,14 +55,12 @@ export async function createClient(params: {
     software_version: params.software_version,
     created_at: Date.now(),
   };
-  await getFirestore().collection(CLIENTS).doc(client_id).set(client);
+  await getContainer(CLIENTS).items.upsert({ ...client, id: client_id });
   return client;
 }
 
 export async function readClient(client_id: string): Promise<RegisteredClient | null> {
-  const doc = await getFirestore().collection(CLIENTS).doc(client_id).get();
-  if (!doc.exists) return null;
-  return doc.data() as RegisteredClient;
+  return readItem<RegisteredClient>(CLIENTS, client_id);
 }
 
 // --- Authorization codes ---
@@ -99,31 +99,46 @@ export async function createCode(params: {
     expires_at: Date.now() + CODE_TTL_MS,
     used: false,
   };
-  await getFirestore().collection(CODES).doc(code).set(doc);
+  await getContainer(CODES).items.upsert({ ...doc, id: code, ttl: ttlFor(doc.expires_at) });
   return doc;
 }
 
 /**
  * Atomically fetch and consume an authorization code. Returns null if the code
  * doesn't exist, is expired, or has already been used.
+ *
+ * One-use under concurrency: the `used: true` write is a replace conditioned
+ * on the etag that was read. If another request consumed the code in between,
+ * Cosmos answers 412 Precondition Failed and this call returns null, so
+ * exactly one caller ever gets the code back.
  */
 export async function consumeCode(code: string): Promise<StoredCode | null> {
-  const firestore = getFirestore();
-  const ref = firestore.collection(CODES).doc(code);
+  const item = getContainer(CODES).item(code, code);
 
-  let consumed: StoredCode | null = null;
-  await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return;
-    const data = snap.data() as StoredCode | undefined;
-    if (!data) return;
-    if (data.used) return;
-    if (data.expires_at < Date.now()) return;
+  let resource: Record<string, unknown> | undefined;
+  try {
+    ({ resource } = await item.read());
+  } catch (err) {
+    if (cosmosStatus(err) === 404) return null;
+    throw err;
+  }
+  if (!resource) return null;
+  const etag = resource._etag as string | undefined;
+  const data = clean<StoredCode>(resource);
+  if (data.used) return null;
+  if (data.expires_at < Date.now()) return null;
+  if (!etag) return null;
 
-    tx.update(ref, { used: true });
-    consumed = data;
-  });
-  return consumed;
+  try {
+    await item.replace(
+      { ...resource, used: true },
+      { accessCondition: { type: "IfMatch", condition: etag } }
+    );
+  } catch (err) {
+    if (cosmosStatus(err) === 412 || cosmosStatus(err) === 404) return null;
+    throw err;
+  }
+  return data;
 }
 
 // --- Refresh tokens ---
@@ -156,7 +171,7 @@ export async function createRefreshToken(params: {
     expires_at: now + REFRESH_TTL_MS,
     revoked: false,
   };
-  await getFirestore().collection(REFRESH).doc(token).set(doc);
+  await getContainer(REFRESH).items.upsert({ ...doc, id: token, ttl: ttlFor(doc.expires_at) });
   return doc;
 }
 
@@ -175,17 +190,14 @@ export async function rotateRefreshToken(
   oldToken: string,
   scopesOverride?: string[]
 ): Promise<StoredRefreshToken | null> {
-  const firestore = getFirestore();
-  const ref = firestore.collection(REFRESH).doc(oldToken);
-
-  const snap = await ref.get();
-  if (!snap.exists) return null;
-  const data = snap.data() as StoredRefreshToken | undefined;
+  const data = await readItem<StoredRefreshToken>(REFRESH, oldToken);
   if (!data) return null;
   if (data.revoked) return null;
   if (data.expires_at < Date.now()) return null;
 
-  await ref.update({ revoked: true });
+  await getContainer(REFRESH)
+    .item(oldToken, oldToken)
+    .patch([{ op: "set", path: "/revoked", value: true }]);
 
   return createRefreshToken({
     client_id: data.client_id,
@@ -195,9 +207,8 @@ export async function rotateRefreshToken(
 }
 
 export async function revokeRefreshToken(token: string): Promise<void> {
-  await getFirestore()
-    .collection(REFRESH)
-    .doc(token)
-    .update({ revoked: true })
+  await getContainer(REFRESH)
+    .item(token, token)
+    .patch([{ op: "set", path: "/revoked", value: true }])
     .catch(() => {});
 }

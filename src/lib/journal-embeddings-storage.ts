@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
-import { getFirestore } from "./firestore";
+import { clean, getContainer, readItem } from "./cosmos";
 
 /**
- * Firestore-backed index of journal-entry embeddings.
+ * Cosmos DB index of journal-entry embeddings.
  *
- * One Firestore doc per per-entry markdown file in `adam-corpus`. The
- * embedding is stored as a native Firestore array of numbers (1536 doubles,
- * ~24KB per doc, well under the 1MB doc limit). At this scale we don't need
- * Firestore's vector index — `semantic_search_journal` loads all docs and
- * does cosine similarity in process.
+ * One item per per-entry markdown file in `adam-corpus`. The embedding is
+ * stored as a plain JSON array of numbers (1536 doubles, about 30KB per
+ * item, well under the 2MB item limit). At this scale we don't need a vector
+ * index: `semantic_search_journal` loads all items and does cosine
+ * similarity in process.
  *
- * Doc id: sha256 of the entry path. Firestore doc ids can't contain `/`
- * and have some other reserved patterns, so a hash sidesteps the lot.
+ * Item id (and partition key): sha256 of the entry path, which keeps `/`
+ * and other awkward characters out of the id.
  *
- * Source of truth is still the markdown in adam-corpus. This collection is
+ * Source of truth is still the markdown in adam-corpus. This container is
  * a derived index: if it's wiped or drifts, the backfill script
  * (scripts/backfill-journal-embeddings.mjs) regenerates it from the source.
  */
@@ -48,18 +48,18 @@ export async function upsertJournalEmbedding(params: {
     embedding: Array.from(params.embedding),
     created_at: Date.now(),
   };
-  await getFirestore().collection(COLLECTION).doc(docIdForPath(params.path)).set(doc);
+  await getContainer(COLLECTION).items.upsert({ ...doc, id: docIdForPath(params.path) });
 }
 
 export async function getJournalEmbedding(path: string): Promise<StoredJournalEmbedding | null> {
-  const snap = await getFirestore().collection(COLLECTION).doc(docIdForPath(path)).get();
-  if (!snap.exists) return null;
-  return snap.data() as StoredJournalEmbedding;
+  return readItem<StoredJournalEmbedding>(COLLECTION, docIdForPath(path));
 }
 
 export async function listJournalEmbeddings(): Promise<StoredJournalEmbedding[]> {
-  const snap = await getFirestore().collection(COLLECTION).get();
-  return snap.docs.map((d) => d.data() as StoredJournalEmbedding);
+  const { resources } = await getContainer(COLLECTION)
+    .items.readAll<Record<string, unknown>>()
+    .fetchAll();
+  return resources.map((r) => clean<StoredJournalEmbedding>(r));
 }
 
 /**

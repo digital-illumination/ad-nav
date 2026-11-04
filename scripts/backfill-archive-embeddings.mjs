@@ -4,10 +4,10 @@
  *
  * Walks `archive/YYYY/MM/*.md` via the GitHub Git Trees API, fetches each
  * drop's body, embeds it via OpenAI text-embedding-3-small, and upserts
- * the result into the Firestore `archive_embeddings` collection.
+ * the result into the Cosmos DB `archive_embeddings` container.
  *
  * Mirrors scripts/backfill-journal-embeddings.mjs. Idempotent: any drop
- * already present in Firestore (keyed by sha256 of its file path) is
+ * already present in Cosmos DB (keyed by sha256 of its file path) is
  * skipped. Safe to run before the archive tier has any content — in that
  * case it simply reports "no entries found".
  *
@@ -16,12 +16,16 @@
  *   GITHUB_TOKEN            PAT with contents:read on that repo
  *   OPENAI_API_KEY          OpenAI key for embedding
  *   JOURNAL_BRANCH          (optional, default 'main')
- *   GOOGLE_CLOUD_PROJECT    (optional, default 'ad-nav')
+ *   COSMOS_ENDPOINT         Cosmos DB account endpoint
+ *   COSMOS_DATABASE         (optional, default 'ad-nav')
+ *   AZURE_SUBSCRIPTION      Digital Illumination subscription (name or id), so
+ *                           the az CLI credential signs in as the right account
  *
- * Firestore auth uses Application Default Credentials. If you haven't set
- * those up locally, run:
+ * Cosmos DB auth is Microsoft Entra (no account keys): sign in with
  *
- *   gcloud auth application-default login
+ *   az login   (then set AZURE_SUBSCRIPTION)
+ *
+ * and hold the Cosmos DB Built-in Data Contributor role on the account.
  *
  * Usage:
  *   JOURNAL_REPO=digital-illumination/adam-corpus \
@@ -31,26 +35,31 @@
  */
 
 import crypto from "node:crypto";
-import { Firestore } from "@google-cloud/firestore";
+import { CosmosClient } from "@azure/cosmos";
+import { AzureCliCredential, DefaultAzureCredential } from "@azure/identity";
 
 const REPO = process.env.JOURNAL_REPO;
 const TOKEN = process.env.GITHUB_TOKEN;
 const OPENAI = process.env.OPENAI_API_KEY;
 const BRANCH = process.env.JOURNAL_BRANCH || process.env.GITHUB_BRANCH || "main";
-const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCP_PROJECT || "ad-nav";
+const COSMOS_ENDPOINT = process.env.COSMOS_ENDPOINT;
+const COSMOS_DATABASE = process.env.COSMOS_DATABASE || "ad-nav";
+const SUBSCRIPTION = process.env.AZURE_SUBSCRIPTION;
 
-if (!REPO || !TOKEN || !OPENAI) {
-  console.error("Missing JOURNAL_REPO, GITHUB_TOKEN, or OPENAI_API_KEY.");
+if (!REPO || !TOKEN || !OPENAI || !COSMOS_ENDPOINT) {
+  console.error("Missing JOURNAL_REPO, GITHUB_TOKEN, OPENAI_API_KEY, or COSMOS_ENDPOINT.");
   process.exit(1);
 }
 
 const COLLECTION = "archive_embeddings";
 const MODEL = "text-embedding-3-small";
 
-const firestore = new Firestore({
-  projectId: PROJECT_ID,
-  ignoreUndefinedProperties: true,
-});
+const container = new CosmosClient({
+  endpoint: COSMOS_ENDPOINT,
+  aadCredentials: SUBSCRIPTION ? new AzureCliCredential({ subscription: SUBSCRIPTION }) : new DefaultAzureCredential(),
+})
+  .database(COSMOS_DATABASE)
+  .container(COLLECTION);
 
 const GH_HEADERS = {
   Authorization: `Bearer ${TOKEN}`,
@@ -139,14 +148,20 @@ async function embedText(text) {
 }
 
 async function alreadyIndexed(path) {
-  const snap = await firestore.collection(COLLECTION).doc(docIdForPath(path)).get();
-  return snap.exists;
+  const id = docIdForPath(path);
+  try {
+    const { resource } = await container.item(id, id).read();
+    return Boolean(resource);
+  } catch (err) {
+    if (err?.code === 404) return false;
+    throw err;
+  }
 }
 
 async function main() {
   console.log(`Repo:    ${REPO}`);
   console.log(`Branch:  ${BRANCH}`);
-  console.log(`Project: ${PROJECT_ID}`);
+  console.log(`Cosmos:  ${COSMOS_DATABASE}/${COLLECTION}`);
   console.log();
 
   const paths = await listArchiveTree();
@@ -178,7 +193,8 @@ async function main() {
       const source = fm.source || undefined;
       const agent = fm.agent || "unknown";
       const vec = await embedText(body);
-      await firestore.collection(COLLECTION).doc(docIdForPath(path)).set({
+      await container.items.upsert({
+        id: docIdForPath(path),
         path,
         timestamp,
         kind,
