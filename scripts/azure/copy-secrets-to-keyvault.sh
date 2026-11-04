@@ -44,13 +44,12 @@ TMPDIR_SECRETS=$(mktemp -d)
 chmod 700 "$TMPDIR_SECRETS"
 trap 'rm -rf "$TMPDIR_SECRETS"' EXIT
 
-TENANT=$(az account show --subscription "$SUB" --query tenantId -o tsv)
 VAULT_ID=$(az keyvault show --name "$VAULT" --resource-group "$RG" --subscription "$SUB" --query id -o tsv)
 
 # Signed-in user's object id in the DI tenant, read from an access token's
 # `oid` claim (the default az tenant may be a client tenant, so `az ad
-# signed-in-user show` could answer for the wrong directory).
-MY_OID=$(az account get-access-token --tenant "$TENANT" --query accessToken -o tsv |
+# signed-in-user show` or `--tenant` would answer for the wrong account).
+MY_OID=$(az account get-access-token --subscription "$SUB" --query accessToken -o tsv |
   python3 -c 'import sys,json,base64; p=sys.stdin.read().split(".")[1]; p+="="*(-len(p)%4); print(json.loads(base64.urlsafe_b64decode(p))["oid"])')
 
 echo "1. Key Vault Secrets Officer on $VAULT for the signed-in user"
