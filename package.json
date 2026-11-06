@@ -9,7 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@google-cloud/firestore": "^8.5.0",
+    "@azure/cosmos": "^4.10.1",
+    "@azure/identity": "^4.14.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "gray-matter": "^4.0.3",
     "jose": "^6.2.2",

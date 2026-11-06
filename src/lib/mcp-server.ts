@@ -662,7 +662,7 @@ WHEN TO USE: when the agent should preserve content as-is. Per-question response
 
 WHEN NOT TO USE: for structured session summaries (use append_to_journal — that's the distilled tier). For canonical "About Adam" content (humans only edit those).
 
-After the GitHub PUT succeeds, the drop is best-effort embedded and upserted into the Firestore archive_embeddings collection so it surfaces in semantic_search_archive. A failed embed is logged but does not fail the tool call.
+After the GitHub PUT succeeds, the drop is best-effort embedded and upserted into the Cosmos DB archive_embeddings container so it surfaces in semantic_search_archive. A failed embed is logged but does not fail the tool call.
 
 Requires admin bearer (MCP_WRITE_TOKEN) or OAuth JWT with context:write scope.`,
     {
@@ -1032,7 +1032,7 @@ async function appendToJournal(args: AppendJournalArgs) {
 
   // Best-effort embed the new entry and upsert it into the journal embedding
   // index. Done after the GitHub PUT so the entry is already durable. A
-  // failed embed or Firestore write is logged but does NOT fail the tool
+  // failed embed or Cosmos write is logged but does NOT fail the tool
   // call: the backfill script can fill the gap later, and missing entries
   // just don't surface in semantic_search_journal results.
   let embeddingSummary = "";
@@ -1779,7 +1779,7 @@ async function searchAll({ auth, query, topK }: SearchAllArgs) {
   }
 
   // Rank each tier independently. Canonical reads from the precomputed index;
-  // journal and archive read from Firestore. Run journal + archive in parallel.
+  // journal and archive read from Cosmos DB. Run journal + archive in parallel.
   const canonical = getCanonicalEmbeddings();
   const [journalItems, archiveItems] = await Promise.all([
     listJournalEmbeddings(),

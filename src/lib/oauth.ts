@@ -4,7 +4,7 @@ import { BASE_URL } from "./constants";
 
 /**
  * OAuth 2.1 primitives: JWT signing and verification, PKCE helpers, scope
- * constants. Kept free of Firestore or request dependencies so it's trivially
+ * constants. Kept free of storage or request dependencies so it's trivially
  * unit-testable and safe to import from anywhere.
  */
 
