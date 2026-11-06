@@ -9,6 +9,8 @@
 #   - AcrPush on the shared registry `digitalillumination`
 #   - Contributor on the `ad-nav` Container App only (not the resource
 #     group, which also holds the DI site's resources)
+#   - Reader on the `di-website-env` environment, so `az containerapp update`
+#     can read the environment the app lives in
 #   - AcrPull on the registry for the app's runtime identity `di-website-app`
 #   - GitHub repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID and
 #     AZURE_SUBSCRIPTION_ID (ids, not secrets; no GitHub secret is created)
@@ -50,6 +52,7 @@ PRINCIPAL=$(az identity show -n "$ID_NAME" -g "$RG" --subscription "$SUB" --quer
 CLIENT_ID=$(az identity show -n "$ID_NAME" -g "$RG" --subscription "$SUB" --query clientId -o tsv)
 ACR_ID=$(az acr show -n digitalillumination --subscription "$SUB" --query id -o tsv)
 APP_ID=$(az containerapp show -n "$APP" -g "$RG" --subscription "$SUB" --query id -o tsv)
+ENV_ID=$(az containerapp env show -n di-website-env -g "$RG" --subscription "$SUB" --query id -o tsv)
 
 grant() {
   local role=$1 scope=$2
@@ -72,6 +75,7 @@ grant() {
 }
 grant AcrPush "$ACR_ID"
 grant Contributor "$APP_ID"
+grant Reader "$ENV_ID"
 
 # The app runs as the existing identity `di-website-app`, which can read Key
 # Vault and Cosmos DB but had no pull right on the registry.
