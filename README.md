@@ -3,7 +3,6 @@
 Personal site for Adam Stacey. Cyberpunk-themed, dual-purpose: human-readable for visitors, machine-readable for AI agents via API routes and a context portfolio.
 
 **Live:** https://ad-nav.co.uk
-**Cloud Run:** https://ad-nav-xyvdz5is7a-nw.a.run.app
 **Repo:** https://github.com/digital-illumination/ad-nav
 
 ## Stack
@@ -12,10 +11,10 @@ Personal site for Adam Stacey. Cyberpunk-themed, dual-purpose: human-readable fo
 - **Language:** TypeScript (strict)
 - **Styling:** Tailwind CSS 4 + custom CSS variables
 - **Content:** Markdown files parsed with gray-matter, rendered with remark/remark-html
-- **Hosting:** GCP Cloud Run (europe-west2) behind Global HTTPS Load Balancer
-- **Domains:** `ad-nav.co.uk` (primary), with redirects from `adamstacey.co.uk` and `adamstacey.com`
-- **CI/CD:** GitHub Actions, Workload Identity Federation (no stored keys)
-- **Container:** Docker, Artifact Registry
+- **Hosting:** Azure Container Apps (`ad-nav` in `di-website-env`, UK South), data in Cosmos DB, secrets in Key Vault
+- **Domains:** `ad-nav.co.uk` (primary), with redirects from `www.ad-nav.co.uk`, `adamstacey.co.uk` and `adamstacey.com` (and their `www` names)
+- **CI/CD:** GitHub Actions, OpenID Connect to Azure (no stored keys)
+- **Container:** Docker, Azure Container Registry
 - **MCP Server:** `mcp/` directory, exposes context portfolio to Claude Desktop and Claude Code
 
 ## Running locally
@@ -46,7 +45,7 @@ ad-nav/
   SPEC.md          # Living system spec (start here for changes)
   AGENTS.md        # Agent rules (Next.js, writing style)
   .mcp.json        # Claude Code MCP server config (project-scoped)
-  Dockerfile       # Cloud Run container build
+  Dockerfile       # Container build
   .github/
     workflows/
       deploy.yml   # CI/CD: build + deploy on push to main
@@ -57,10 +56,10 @@ ad-nav/
 Push to `main` triggers automatic deployment:
 
 1. GitHub Actions builds the Docker image
-2. Pushes to Artifact Registry (`europe-west2-docker.pkg.dev/ad-nav/ad-nav/site`)
-3. Deploys to Cloud Run (`ad-nav` service, `europe-west2`)
+2. Pushes to the shared Azure Container Registry `digitalillumination`
+3. Updates the Azure Container App `ad-nav` (resource group `di-website`), then smoke-tests it
 
-GCP project: `ad-nav`
+See `SPEC.md` (Infrastructure) for the detail.
 
 ## Spec-driven development
 

@@ -133,7 +133,6 @@ Cyberpunk aesthetic built with CSS custom properties:
 - **CI/CD:** `.github/workflows/deploy.yml` builds the Docker image, pushes it to the shared registry `digitalillumination` and updates the Container App on push to main, then smoke-tests `/`, `/api/context` and the OAuth discovery document on the app's own address
 - **Dockerfile:** Multi-stage Node 20 Alpine build with standalone Next.js output
 - **Infra details:** Resource names are here; IP addresses, ids and DNS records are in a private runbook, not in this repo
-- **Cutover scripts (temporary):** `scripts/azure/copy-secrets-to-keyvault.sh` (Google Secret Manager to Key Vault, hash-checked, never prints a value), `scripts/azure/setup-azure-access.sh` (the CI identity and the runtime identity's registry pull right), `scripts/azure/copy-signins-from-firestore.mjs` (registered OAuth clients, live refresh tokens, sessions and flags, so no connector has to sign in again). Delete them when the Google project is shut down
 
 ### Custom Domains
 
@@ -348,6 +347,8 @@ Verified end-to-end via manual curl (anonymous reads, static-bearer writes, full
 ### Move to Azure (November 2026)
 
 Google Cloud Run, Firestore, Secret Manager and the Google load balancer replaced by Azure Container Apps, Cosmos DB (serverless), Key Vault and Container Apps managed certificates, so Google Cloud spend can reach zero. Same container, same address, same MCP tools. Storage module functions kept their signatures; only their insides changed. The OAuth code consume moved from a Firestore transaction to an etag-conditioned replace. Embeddings were rebuilt with the backfill scripts rather than copied; registered OAuth clients and live refresh tokens were copied at cutover so connectors did not have to sign in again. The host redirects moved from the load balancer into `next.config.ts`.
+
+DNS for all six names moved to Azure on 2026-11-07, and the Google project `ad-nav` was shut down the same day, with its Terraform environment retired in the infra repo. The one-off cutover scripts under `scripts/azure/` were removed with it.
 
 ### Context Curation
 **Done:**
